@@ -1,0 +1,86 @@
+version: "3.8"
+
+services:
+  # Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper
+    ports:
+      - "2181:2181"
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    ports:
+      - "29092:29092"
+
+  # MinIO (Data Lake Layer)
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin123
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # MinIO API
+      - "9001:9001" # MinIO Console
+    volumes:
+      - minio_data:/data
+
+  # PostgreSQL (Database Layer)
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5431:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Kafka Connect
+  kafka_connect:
+    image: confluentinc/cp-kafka-connect:latest
+    container_name: kafka_connect
+    depends_on:
+      - kafka
+      - minio
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_GROUP_ID: "kafka-connect-group"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect_configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect_offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect_statuses"
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: "/usr/share/java"
+    ports:
+      - "8083:8083"
+    volumes:
+      - kafka_connect_data:/kafka-connect
+
+volumes:
+  zookeeper_data:
+  kafka_data:
+  minio_data:
+  postgres_data:
+  kafka_connect_data:
