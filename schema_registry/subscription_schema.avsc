@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "TwitchSubscription",
+  "fields": [
+    { "name": "room_name", "type": "string" },
+    { "name": "sub_plan", "type": "string" },
+    { "name": "sub_plan_name", "type": "string" },
+    { "name": "sub_message", "type": ["null", "string"], "default": null },
+    { "name": "system_message", "type": ["null", "string"], "default": null },
+    { "name": "timestamp", "type": "string" }
+  ]
+}
