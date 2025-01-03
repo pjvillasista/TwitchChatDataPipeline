@@ -2,78 +2,67 @@ import logging
 import os
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient
 from confluent_kafka.schema_registry.error import SchemaRegistryError
-from dotenv import load_dotenv
-
-load_dotenv()
 
 class SchemaClient:
-    def __init__(self, schema_url, schema_subject_name, schema_str, schema_type):
+    def __init__(self, schema_url):
         """Initialize the Schema Registry Client."""
         self.schema_url = schema_url
-        self.schema_subject_name = schema_subject_name
-        self.schema_str = schema_str
-        self.schema_type = schema_type
-        try:
-            self.schema_registry_client = SchemaRegistryClient(
-                {"url": self.schema_url}
-            )
-        except ValueError as e:
-            logging.error(f"SchemaRegistryClient initialization failed: {e}")
-            raise
+        self.schema_registry_client = SchemaRegistryClient({"url": self.schema_url})
 
-    def get_schema_id(self):
+    def register_schema(self, subject_name, schema_path, schema_type="AVRO"):
+        """Register a schema in the Schema Registry."""
         try:
-            schema_version = self.schema_registry_client.get_latest_version(
-                self.schema_subject_name
+            # Load schema from file
+            with open(schema_path, "r") as schema_file:
+                schema_str = schema_file.read()
+
+            # Register schema
+            schema_id = self.schema_registry_client.register_schema(
+                subject_name=subject_name,
+                schema=Schema(schema_str, schema_type),
             )
-            schema_id = schema_version.schema_id
-            logging.info(
-                f"Schema ID for {self.schema_subject_name} is {schema_id}"
-            )
+            logging.info(f"Schema registered successfully for {subject_name} with ID {schema_id}")
             return schema_id
-        except SchemaRegistryError:
-            return False
 
-    def register_schema(self):
-        """Register the Schema in Schema Registry."""
-        try:
-            self.schema_registry_client.register_schema(
-                subject_name=self.schema_subject_name,
-                schema=Schema(self.schema_str, schema_type=self.schema_type),
-            )
-            logging.info(
-                f"Schema Registered Successfully for {self.schema_subject_name}"
-            )
         except SchemaRegistryError as e:
-            logging.error(f"Error while registering the Schema: {e}")
-            exit(1)
+            logging.error(f"Error registering schema for {subject_name}: {e}")
+            raise e
 
-    def set_compatibility(self, compatibility_level):
-        """Update Subject Level Compatibility Level."""
+    def set_compatibility(self, subject_name, compatibility_level="BACKWARD"):
+        """Set compatibility level for a subject."""
         try:
-            self.schema_registry_client.set_compatibility(
-                self.schema_subject_name, compatibility_level
-            )
-            logging.info(f"Compatibility level set to {compatibility_level}")
+            self.schema_registry_client.set_compatibility(subject_name, compatibility_level)
+            logging.info(f"Compatibility level set to {compatibility_level} for {subject_name}")
         except SchemaRegistryError as e:
-            logging.error(e)
-            exit(1)
+            logging.error(f"Error setting compatibility for {subject_name}: {e}")
+            raise e
 
 
 if __name__ == "__main__":
-    # Load environment variables
-    topic = os.environ.get("KAFKA_TOPIC")
-    schema_url = os.environ.get("SCHEMA_REGISTRY_URL")
-    schema_type = "AVRO"
+    logging.basicConfig(level=logging.INFO)
 
-    print(f"Schema Registry URL: {schema_url}")
-    print(f"Kafka Topic: {topic}")
-
-    # Load schema
-    with open("schema_registry/subscription_schema.avsc") as avro_schema_file:
-        schema_str = avro_schema_file.read()
+    # Schema Registry URL
+    schema_url = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
 
     # Initialize Schema Client
-    schema_client = SchemaClient(schema_url, topic, schema_str, schema_type)
-    schema_client.set_compatibility("BACKWARD")
-    schema_client.register_schema()
+    schema_client = SchemaClient(schema_url)
+
+    # Define schemas to register
+    schemas_to_register = [
+        {"subject_name": "twitch_sub_messages-value", "schema_path": "schema_registry/subscription_schema.avsc"},
+        {"subject_name": "twitch_chat_messages-value", "schema_path": "schema_registry/chat_message_schema.avsc"},
+        {"subject_name": "twitch_user_info-value", "schema_path": "schema_registry/user_info_schema.avsc"},
+    ]
+
+    # Register schemas and set compatibility
+    for schema_info in schemas_to_register:
+        subject = schema_info["subject_name"]
+        schema_path = schema_info["schema_path"]
+
+        # Register schema
+        try:
+            schema_id = schema_client.register_schema(subject_name=subject, schema_path=schema_path)
+            schema_client.set_compatibility(subject_name=subject, compatibility_level="BACKWARD")
+            logging.info(f"Schema {subject} registered with ID {schema_id} and BACKWARD compatibility.")
+        except Exception as e:
+            logging.error(f"Failed to register schema {subject}: {e}")
