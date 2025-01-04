@@ -1,20 +1,18 @@
 version: "3.8"
 
 services:
-  # Zookeeper
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
-    volumes:
-      - zookeeper_data:/var/lib/zookeeper
+    # volumes:
+    #   - zookeeper_data:/var/lib/zookeeper
     ports:
       - "2181:2181"
 
-  # Kafka
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-enterprise-kafka:latest
     container_name: kafka
     depends_on:
       - zookeeper
@@ -24,12 +22,25 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    volumes:
-      - kafka_data:/var/lib/kafka/data
+    # volumes:
+    #   - kafka_data:/var/lib/kafka/data
     ports:
+      - "9092:9092"
       - "29092:29092"
 
-  # MinIO (Data Lake Layer)
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    container_name: schema-registry
+    depends_on:
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+    volumes:
+      - schema-registry-data:/var/lib/schema-registry
+    ports:
+      - "8090:8081"
+
   minio:
     image: minio/minio:latest
     container_name: minio
@@ -38,29 +49,29 @@ services:
       MINIO_ROOT_PASSWORD: admin123
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000" # MinIO API
-      - "9001:9001" # MinIO Console
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio_data:/data
 
-  # PostgreSQL (Database Layer)
   postgres:
     image: postgres:latest
     container_name: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: analytics
     ports:
       - "5431:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  # Kafka Connect
   kafka_connect:
     image: confluentinc/cp-kafka-connect:latest
     container_name: kafka_connect
     depends_on:
       - kafka
+      - schema-registry
       - minio
     environment:
       CONNECT_BOOTSTRAP_SERVERS: kafka:9092
@@ -68,19 +79,61 @@ services:
       CONNECT_CONFIG_STORAGE_TOPIC: "connect_configs"
       CONNECT_OFFSET_STORAGE_TOPIC: "connect_offsets"
       CONNECT_STATUS_STORAGE_TOPIC: "connect_statuses"
-      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
-      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
-      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
-      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_KEY_CONVERTER: "io.confluent.connect.avro.AvroConverter"
+      CONNECT_VALUE_CONVERTER: "io.confluent.connect.avro.AvroConverter"
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_PLUGIN_PATH: "/usr/share/java"
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka_connect
     ports:
       - "8083:8083"
-    volumes:
-      - kafka_connect_data:/kafka-connect
+    # volumes:
+    #   - kafka_connect_data:/kafka-connect
+
+  spark-master:
+    image: bitnami/spark:latest
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+
+  spark-worker:
+    image: bitnami/spark:latest
+    container_name: spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    depends_on:
+      - spark-master
+    ports:
+      - "8081:8081"
+
+  # python-producer:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: python-producer
+  #   depends_on:
+  #     - kafka
+  #     - schema-registry
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     APP_ID: ${APP_ID}
+  #     APP_SECRET: ${APP_SECRET}
+  #     SCHEMA_REGISTRY_URL: ${SCHEMA_REGISTRY_URL}
+  #     KAFKA_BROKER: ${KAFKA_BROKER}
+  #     KAFKA_TOPIC: "twitch_chat_messages"
+  #     TARGET_CHANNEL: ${TARGET_CHANNEL}
+  #   volumes:
+  #     - .:/app
 
 volumes:
-  zookeeper_data:
-  kafka_data:
   minio_data:
   postgres_data:
-  kafka_connect_data:
+  schema-registry-data:
+  # kafka_connect_data:
+  # zookeeper_data:
+  # kafka_data:
