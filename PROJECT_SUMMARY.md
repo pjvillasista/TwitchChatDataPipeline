@@ -86,3 +86,5 @@ This project creates a scalable and accessible system for analyzing Twitch chat 
 - Identify **when to run ads** for maximum visibility.
 - Understand audience engagement patterns during streams.  
   For streamers, it highlights **what drives subscriptions**, enabling data-driven decisions to improve audience retention and revenue.
+
+---
