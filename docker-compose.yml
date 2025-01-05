@@ -6,8 +6,6 @@ services:
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
-    # volumes:
-    #   - zookeeper_data:/var/lib/zookeeper
     ports:
       - "2181:2181"
 
@@ -22,8 +20,6 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    # volumes:
-    #   - kafka_data:/var/lib/kafka/data
     ports:
       - "9092:9092"
       - "29092:29092"
@@ -36,8 +32,6 @@ services:
     environment:
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-    volumes:
-      - schema-registry-data:/var/lib/schema-registry
     ports:
       - "8090:8081"
 
@@ -46,33 +40,66 @@ services:
     container_name: minio
     environment:
       MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: admin123
+      MINIO_ROOT_PASSWORD: password
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio_data:/data
+      - ./minio-data:/data
 
-  postgres:
-    image: postgres:latest
-    container_name: postgres
+  mc:
+    depends_on:
+      - minio
+    image: minio/mc
+    container_name: mc
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc config host add minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
+      /usr/bin/mc rm -r --force minio/warehouse;
+      /usr/bin/mc mb minio/warehouse;
+      /usr/bin/mc policy set public minio/warehouse;
+      tail -f /dev/null
+      "
+
+  iceberg-rest:
+    image: tabulario/iceberg-rest
+    container_name: iceberg-rest
+    depends_on:
+      - minio
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: analytics
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
     ports:
-      - "5431:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - "8181:8181"
 
-  kafka_connect:
+  spark:
+    image: tabulario/spark-iceberg
+    container_name: spark
+    depends_on:
+      - kafka
+      - minio
+      - iceberg-rest
+    environment:
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      SPARK_DRIVER_MEMORY: 2G
+      SPARK_EXECUTOR_MEMORY: 2G
+    ports:
+      - "4040:4040"
+    volumes:
+      - ./warehouse:/home/iceberg/warehouse
+      - ./notebooks:/home/iceberg/notebooks
+
+  kafka-connect:
     image: confluentinc/cp-kafka-connect:latest
-    container_name: kafka_connect
+    container_name: kafka-connect
     depends_on:
       - kafka
       - schema-registry
-      - minio
     environment:
       CONNECT_BOOTSTRAP_SERVERS: kafka:9092
       CONNECT_GROUP_ID: "kafka-connect-group"
@@ -84,56 +111,11 @@ services:
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_PLUGIN_PATH: "/usr/share/java"
-      CONNECT_REST_ADVERTISED_HOST_NAME: kafka_connect
     ports:
       - "8083:8083"
-    # volumes:
-    #   - kafka_connect_data:/kafka-connect
-
-  spark-master:
-    image: bitnami/spark:latest
-    container_name: spark-master
-    environment:
-      - SPARK_MODE=master
-    ports:
-      - "7077:7077"
-      - "8080:8080"
-
-  spark-worker:
-    image: bitnami/spark:latest
-    container_name: spark-worker
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-    depends_on:
-      - spark-master
-    ports:
-      - "8081:8081"
-
-  # python-producer:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   container_name: python-producer
-  #   depends_on:
-  #     - kafka
-  #     - schema-registry
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     APP_ID: ${APP_ID}
-  #     APP_SECRET: ${APP_SECRET}
-  #     SCHEMA_REGISTRY_URL: ${SCHEMA_REGISTRY_URL}
-  #     KAFKA_BROKER: ${KAFKA_BROKER}
-  #     KAFKA_TOPIC: "twitch_chat_messages"
-  #     TARGET_CHANNEL: ${TARGET_CHANNEL}
-  #   volumes:
-  #     - .:/app
 
 volumes:
-  minio_data:
-  postgres_data:
-  schema-registry-data:
-  # kafka_connect_data:
-  # zookeeper_data:
-  # kafka_data:
+  minio-data:
+networks:
+  default:
+    name: iceberg_net
