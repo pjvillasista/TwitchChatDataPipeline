@@ -53,13 +53,30 @@ def delivery_report(err, msg):
         print(f"Message delivered to {msg.topic()} [{msg.partition()}] at offset {msg.offset()}")
 
 
-async def on_chat_message(chat_event: ChannelChatMessageEvent):
+async def fetch_current_stream_info(twitch):
+    """Fetch and cache the current stream information."""
+    user = await first(twitch.get_users(logins=[TARGET_CHANNEL]))
+    if user is None:
+        print(f"User {TARGET_CHANNEL} not found")
+        return None, None
+
+    user_id = user.id
+    async for stream in twitch.get_streams(user_id=[user_id]):
+        print(f"Fetched stream info: stream_id={stream.id}, broadcaster_id={stream.user_id}")
+        return stream.id, stream.user_id
+
+    print(f"No active stream found for user {TARGET_CHANNEL}")
+    return None, None
+
+
+async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
     """Callback function to handle chat messages."""
     try:
         chat_event_data = chat_event.to_dict()
 
         # Prepare chat message data
         message_data = {
+            "stream_id": stream_id,
             "message_id": chat_event_data["event"]["message_id"],
             "broadcaster_user_id": chat_event_data["event"]["broadcaster_user_id"],
             "broadcaster_user_name": chat_event_data["event"]["broadcaster_user_name"],
@@ -88,13 +105,14 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent):
         print(f"Error processing chat message: {e}")
 
 
-async def on_chat_notification(notification_event: ChannelChatNotificationEvent):
+async def on_chat_notification(notification_event: ChannelChatNotificationEvent, stream_id: str):
     """Handle chat notifications and publish to Kafka."""
     try:
         notification_event_data = notification_event.to_dict()
 
         # Prepare notification data
         notification_data = {
+            "stream_id": stream_id,
             "subscription_id": notification_event_data["subscription"]["id"],
             "broadcaster_user_id": notification_event_data["event"]["broadcaster_user_id"],
             "broadcaster_user_name": notification_event_data["event"]["broadcaster_user_name"],
