@@ -1,10 +1,12 @@
 import os
+import json
 import asyncio
 from twitchAPI.twitch import Twitch
-from twitchAPI.oauth import UserAuthenticator
-from twitchAPI.type import AuthScope, ChatEvent
-from twitchAPI.chat import Chat, ChatMessage, ChatSub, EventData
+from twitchAPI.eventsub.websocket import EventSubWebsocket
+from twitchAPI.object.eventsub import ChannelChatNotificationEvent, ChannelChatMessageEvent
 from twitchAPI.helper import first
+from twitchAPI.oauth import UserAuthenticationStorageHelper
+from twitchAPI.type import AuthScope
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
@@ -12,190 +14,172 @@ from confluent_kafka.serialization import SerializationContext, MessageField
 from dotenv import load_dotenv
 from datetime import datetime
 
+# Load environment variables
+load_dotenv()
 
-class TwitchKafkaProducer:
-    def __init__(self):
-        """Initialize TwitchKafkaProducer with necessary configurations."""
-        load_dotenv()
+# Constants
+APP_ID = os.getenv("APP_ID")
+APP_SECRET = os.getenv("APP_SECRET")
+SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:29092")
+NOTIFICATION_TOPIC = os.getenv("NOTIFICATION_TOPIC", "notifications")
+CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "kaicenat")
+TARGET_SCOPES = [AuthScope.USER_READ_CHAT]
 
-        # Kafka and Schema Registry Configuration
-        self.schema_registry_url = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
-        self.kafka_broker = os.getenv("KAFKA_BROKER", "localhost:29092")
-        self.target_channel = os.getenv("TARGET_CHANNEL", "jynxzi")
-        self.message_topic = os.getenv("CHAT_MESSAGES_TOPIC", "twitch_chat_messages")
-        self.subscription_topic = os.getenv("SUBSCRIPTIONS_TOPIC", "twitch_subscriptions")
+# Initialize Schema Registry Client
+schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
 
-        # Twitch API Credentials
-        self.client_id = os.getenv("APP_ID")
-        self.client_secret = os.getenv("APP_SECRET")
+# Load Avro schemas
+with open("schema_registry/notification_schema.avsc") as notification_schema_file:
+    notification_schema = notification_schema_file.read()
 
-        if not self.client_id or not self.client_secret:
-            raise ValueError("Twitch credentials are not set.")
+with open("schema_registry/message_schema.avsc") as chat_schema_file:
+    chat_message_schema = chat_schema_file.read()
 
-        # Initialize Schema Registry and Avro Serializer
-        self.schema_registry_client = SchemaRegistryClient({"url": self.schema_registry_url})
+# Initialize Avro Serializers
+notification_serializer = AvroSerializer(schema_registry_client, notification_schema)
+chat_serializer = AvroSerializer(schema_registry_client, chat_message_schema)
 
-
-        # Load schemas
-        with open("schema_registry/subscription_schema.avsc") as sub_schema_file:
-            subscription_schema_str = sub_schema_file.read()
-
-        with open("schema_registry/chat_message_schema.avsc") as msg_schema_file:
-            message_schema_str = msg_schema_file.read()
-
-
-        # Initialize Avro Serializers
-        self.subscription_serializer = AvroSerializer(self.schema_registry_client, subscription_schema_str)
-        self.message_serializer = AvroSerializer(self.schema_registry_client, message_schema_str)
-
-        # Initialize Kafka Producer
-        self.producer = Producer({"bootstrap.servers": self.kafka_broker})
-        
-        
-        # Cache for stream info
-        self.stream_id = None
-        self.broadcaster_id = None
-    def delivery_report(self, err, msg):
-        """Delivery report callback to log Kafka message delivery status."""
-        if err:
-            print(f"Message delivery failed: {err}")
-        else:
-            print(f"Message delivered to {msg.topic()} [{msg.partition()}] at offset {msg.offset()}")
+# Initialize Kafka Producer
+producer = Producer({"bootstrap.servers": KAFKA_BROKER})
 
 
-    async def fetch_current_stream_info(self, twitch):
-        """Fetch and cache the current stream information."""
-        try:
-            user = await first(twitch.get_users(logins=[self.target_channel]))
-            if not user:
-                print(f"User '{self.target_channel}' not found.")
-                return None
-
-            async for stream in twitch.get_streams(user_login=[self.target_channel]):
-                self.stream_id = stream.id
-                self.broadcaster_id = stream.user_id
-                print(f"Fetched stream info: stream_id={self.stream_id}, broadcaster_id={self.broadcaster_id}")
-                return
-        except Exception as e:
-            print(f"Error fetching stream info: {e}")
+def delivery_report(err, msg):
+    """Delivery report callback for Kafka."""
+    if err:
+        print(f"Message delivery failed: {err}")
+    else:
+        print(f"Message delivered to {msg.topic()} [{msg.partition()}] at offset {msg.offset()}")
 
 
-    async def handle_ready(self, event: EventData):
-        """Callback for when the bot is ready."""
-        print(f"Bot is ready. Joining channel '{self.target_channel}'...")
-        await event.chat.join_room(self.target_channel)
+async def on_chat_message(chat_event: ChannelChatMessageEvent):
+    """Callback function to handle chat messages."""
+    try:
+        chat_event_data = chat_event.to_dict()
+
+        # Prepare chat message data
+        message_data = {
+            "message_id": chat_event_data["event"]["message_id"],
+            "broadcaster_user_id": chat_event_data["event"]["broadcaster_user_id"],
+            "broadcaster_user_name": chat_event_data["event"]["broadcaster_user_name"],
+            "broadcaster_user_login": chat_event_data["event"]["broadcaster_user_login"],
+            "chatter_user_id": chat_event_data["event"]["chatter_user_id"],
+            "chatter_user_name": chat_event_data["event"]["chatter_user_name"],
+            "chatter_user_login": chat_event_data["event"]["chatter_user_login"],
+            "message_text": chat_event_data["event"]["message"]["text"],
+            "message_type": chat_event_data["event"]["message"]["fragments"][0]["type"],
+            "badges": chat_event_data["event"].get("badges", []),
+            "color": chat_event_data["event"].get("color", ""),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        serialized_msg_data = chat_serializer(
+            message_data, SerializationContext(CHAT_TOPIC, MessageField.VALUE)
+        )
+        producer.produce(
+            topic=CHAT_TOPIC,
+            value=serialized_msg_data,
+            key=message_data["broadcaster_user_id"],
+            callback=delivery_report,
+        )
+        print(f"Chat message published: {message_data}")
+    except Exception as e:
+        print(f"Error processing chat message: {e}")
 
 
+async def on_chat_notification(notification_event: ChannelChatNotificationEvent):
+    """Handle chat notifications and publish to Kafka."""
+    try:
+        notification_event_data = notification_event.to_dict()
 
-    async def handle_message(self, msg: ChatMessage):
-        """Callback for Twitch chat messages."""
-        try:
-            # Use cached stream_id and broadcaster_id
-            if not self.stream_id or not self.broadcaster_id:
-                print("Stream info not available. Skipping message.")
-                return
+        # Prepare notification data
+        notification_data = {
+            "subscription_id": notification_event_data["subscription"]["id"],
+            "broadcaster_user_id": notification_event_data["event"]["broadcaster_user_id"],
+            "broadcaster_user_name": notification_event_data["event"]["broadcaster_user_name"],
+            "broadcaster_user_login": notification_event_data["event"]["broadcaster_user_login"],
+            "chatter_user_id": notification_event_data["event"]["chatter_user_id"],
+            "chatter_user_name": notification_event_data["event"]["chatter_user_name"],
+            "message_id": notification_event_data["event"]["message_id"],
+            "message_text": notification_event_data["event"]["message"]["text"],
+            "notice_type": notification_event_data["event"].get("notice_type"),
+            "badges": notification_event_data["event"].get("badges", []),
+            "resub": notification_event_data["event"].get("resub"),
+            "timestamp": datetime.now().isoformat(),
+        }
 
-            message_data = {
-                "stream_id": self.stream_id,
-                "broadcaster_id": self.broadcaster_id,
-                "user_id": msg.user.id,
-                "message_id": msg.id,
-                "message_text": msg.text,
-                "bits": msg.bits,
-                "hypechat": msg.hype_chat,
-                "timestamp": datetime.now().isoformat(),
-            }
+        serialized_notifications_data = notification_serializer(
+            notification_data, SerializationContext(NOTIFICATION_TOPIC, MessageField.VALUE)
+        )
+        producer.produce(
+            topic=NOTIFICATION_TOPIC,
+            value=serialized_notifications_data,
+            key=notification_data["broadcaster_user_id"],
+            callback=delivery_report,
+        )
+        print(f"Notification published: {notification_data}")
+    except Exception as e:
+        print(f"Error processing notification: {e}")
 
-            # Serialize the message data
-            serialized_data = self.message_serializer(
-                message_data, SerializationContext(self.message_topic, MessageField.VALUE)
+
+async def get_broadcaster_id(twitch):
+    """Fetch the broadcaster ID for the target channel."""
+    user = await first(twitch.get_users(logins=[TARGET_CHANNEL]))
+    if user:
+        return user.id
+    else:
+        raise ValueError(f"Broadcaster '{TARGET_CHANNEL}' not found.")
+
+
+async def run():
+    # Initialize Twitch API with authentication helper
+    twitch = await Twitch(APP_ID, APP_SECRET)
+    helper = UserAuthenticationStorageHelper(twitch, TARGET_SCOPES)
+    await helper.bind()
+
+    # Fetch the broadcaster ID for the target channel
+    broadcaster_user_id = await get_broadcaster_id(twitch)
+    user = await first(twitch.get_users())
+
+    # Start the EventSub Websocket
+    eventsub = EventSubWebsocket(twitch)
+    eventsub.start()
+
+    try:
+        # Start WebSocket subscriptions as concurrent tasks
+        chat_notification_task = asyncio.create_task(
+            eventsub.listen_channel_chat_notification(
+                broadcaster_user_id=broadcaster_user_id,
+                user_id=user.id,
+                callback=on_chat_notification,
             )
-
-            # Produce the serialized message to Kafka
-            self.producer.produce(
-                topic=self.message_topic,
-                value=serialized_data,
-                key=self.stream_id,  # Use stream_id as the key
-                callback=self.delivery_report,
+        )
+        chat_message_task = asyncio.create_task(
+            eventsub.listen_channel_chat_message(
+                broadcaster_user_id=broadcaster_user_id,
+                user_id=user.id,
+                callback=on_chat_message,
             )
-            self.producer.flush()
+        )
 
-            print(f"Produced chat message: {message_data}")
+        # Keep the program running until manually interrupted
+        print("Listening for chat notifications and messages... Press Ctrl+C to stop.")
+        await asyncio.Event().wait()
 
-        except Exception as e:
-            print(f"Error processing chat message: {e}")
-
-
-    async def handle_subscription(self, sub: ChatSub):
-        """Callback for Twitch subscription events."""
-        try:
-            subscription_data = {
-                "room_name": sub.room.name if sub.room and sub.room.name else "unknown",
-                "sub_plan": sub.sub_plan if sub.sub_plan else "unknown",
-                "sub_plan_name": sub.sub_plan_name if sub.sub_plan_name else "unknown",
-                "sub_message": sub.sub_message if sub.sub_message else None,
-                "system_message": sub.system_message if sub.system_message else None,
-                "timestamp": datetime.now().isoformat(),
-            }
-
-            # Serialize the subscription data
-            serialized_data = self.subscription_serializer(
-                subscription_data, SerializationContext(self.subscription_topic, MessageField.VALUE)
-            )
-
-            # Produce the serialized data to Kafka
-            self.producer.produce(
-                topic=self.subscription_topic,
-                value=serialized_data,
-                callback=self.delivery_report,
-            )
-            self.producer.flush()
-
-            print(f"Produced message: {subscription_data}")
-
-        except Exception as e:
-            print(f"Error processing subscription: {e}")
-
-
-    async def listen_for_exit(self):
-        """Wait for Enter key to terminate the program."""
-        print("Press Enter to stop the bot...")
-        await asyncio.to_thread(input)
-        print("Stopping bot...")
-
-    async def run(self):
-        """Main function to initialize and run the Twitch bot."""
-        # Initialize Twitch API
-        twitch = await Twitch(self.client_id, self.client_secret)
-        auth = UserAuthenticator(twitch, [AuthScope.CHAT_READ], force_verify=False)
-        token, refresh_token = await auth.authenticate()
-        await twitch.set_user_authentication(token, [AuthScope.CHAT_READ], refresh_token)
-
-
-        # Fetch the stream info
-        await self.fetch_current_stream_info(twitch)
-
-
-        # Initialize Twitch chat
-        chat = await Chat(twitch)
-        chat.register_event(ChatEvent.READY, self.handle_ready)
-        chat.register_event(ChatEvent.SUB, self.handle_subscription)
-        chat.register_event(ChatEvent.MESSAGE, self.handle_message)
-
-
-        # Start the bot
-        print(f"Starting bot for channel '{self.target_channel}'...")
-        try:
-            chat.start()
-            await self.listen_for_exit()
-        except Exception as e:
-            print(f"Error running bot: {e}")
-        finally:
-            await chat.stop()
-            await twitch.close()
-            print("Bot stopped.")
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    finally:
+        # Cancel tasks and perform cleanup
+        chat_notification_task.cancel()
+        chat_message_task.cancel()
+        await eventsub.stop()
+        await twitch.close()
+        print("Shutdown complete.")
 
 
 if __name__ == "__main__":
-    producer = TwitchKafkaProducer()
-    asyncio.run(producer.run())
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        print("Exiting program.")
