@@ -1,0 +1,132 @@
+{
+  "type": "record",
+  "name": "TwitchNotification",
+  "namespace": "com.twitch.notifications",
+  "fields": [
+    {
+      "name": "subscription_od",
+      "type": "string",
+      "doc": "Unique ID of the current stream."
+    },
+    {
+      "name": "subscription_id",
+      "type": "string",
+      "doc": "Unique ID of the subscription."
+    },
+    {
+      "name": "broadcaster_user_id",
+      "type": "string",
+      "doc": "User ID of the broadcaster."
+    },
+    {
+      "name": "broadcaster_user_name",
+      "type": "string",
+      "doc": "Display name of the broadcaster."
+    },
+    {
+      "name": "broadcaster_user_login",
+      "type": "string",
+      "doc": "Login name of the broadcaster."
+    },
+    {
+      "name": "chatter_user_id",
+      "type": "string",
+      "doc": "User ID of the chatter."
+    },
+    {
+      "name": "chatter_user_name",
+      "type": "string",
+      "doc": "Display name of the chatter."
+    },
+    {
+      "name": "message_id",
+      "type": "string",
+      "doc": "Unique ID of the message."
+    },
+    {
+      "name": "message_text",
+      "type": "string",
+      "doc": "Text of the chat message."
+    },
+    {
+      "name": "notice_type",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Type of notice (e.g., 'sub', 'resub', 'announcement')."
+    },
+    {
+      "name": "badges",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "Badge",
+          "fields": [
+            {
+              "name": "set_id",
+              "type": "string",
+              "doc": "Set ID of the badge."
+            },
+            {
+              "name": "id",
+              "type": "string",
+              "doc": "Badge ID."
+            },
+            {
+              "name": "info",
+              "type": ["null", "string"],
+              "default": null,
+              "doc": "Additional information about the badge."
+            }
+          ]
+        }
+      },
+      "default": [],
+      "doc": "List of badges associated with the chatter."
+    },
+    {
+      "name": "resub",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Resubscription",
+          "fields": [
+            {
+              "name": "cumulative_months",
+              "type": "int",
+              "doc": "Total number of months the user has subscribed."
+            },
+            {
+              "name": "duration_months",
+              "type": "int",
+              "doc": "Duration of the current subscription."
+            },
+            {
+              "name": "sub_tier",
+              "type": "string",
+              "doc": "Subscription tier (e.g., '1000', '2000')."
+            },
+            {
+              "name": "is_prime",
+              "type": "boolean",
+              "doc": "Indicates if the subscription is via Amazon Prime."
+            },
+            {
+              "name": "is_gift",
+              "type": "boolean",
+              "doc": "Indicates if the subscription is a gift."
+            }
+          ]
+        }
+      ],
+      "default": null,
+      "doc": "Details of resubscription events."
+    },
+    {
+      "name": "timestamp",
+      "type": "string",
+      "doc": "Timestamp of the event in ISO 8601 format."
+    }
+  ]
+}

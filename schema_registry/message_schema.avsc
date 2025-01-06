@@ -1,0 +1,33 @@
+{
+  "type": "record",
+  "name": "TwitchChatMessage",
+  "fields": [
+    { "name": "stream_id", "type": ["null", "string"], "default": null },
+    { "name": "message_id", "type": "string" },
+    { "name": "broadcaster_user_id", "type": "string" },
+    { "name": "broadcaster_user_name", "type": "string" },
+    { "name": "broadcaster_user_login", "type": "string" },
+    { "name": "chatter_user_id", "type": "string" },
+    { "name": "chatter_user_name", "type": "string" },
+    { "name": "chatter_user_login", "type": "string" },
+    { "name": "message_text", "type": "string" },
+    { "name": "message_type", "type": "string" },
+    {
+      "name": "badges",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "Badge",
+          "fields": [
+            { "name": "set_id", "type": "string" },
+            { "name": "id", "type": "string" },
+            { "name": "info", "type": "string" }
+          ]
+        }
+      }
+    },
+    { "name": "color", "type": "string" },
+    { "name": "timestamp", "type": "string" }
+  ]
+}
