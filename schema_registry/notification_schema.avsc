@@ -4,14 +4,19 @@
   "namespace": "com.twitch.notifications",
   "fields": [
     {
-      "name": "subscription_od",
+      "name": "stream_id",
       "type": "string",
       "doc": "Unique ID of the current stream."
     },
     {
       "name": "subscription_id",
       "type": "string",
-      "doc": "Unique ID of the subscription."
+      "doc": "Unique ID of the subscription to the event."
+    },
+    {
+      "name": "subscription_type",
+      "type": "string",
+      "doc": "String of subscription type (e.g., 'channel.chat.notification')."
     },
     {
       "name": "broadcaster_user_id",
@@ -67,11 +72,7 @@
               "type": "string",
               "doc": "Set ID of the badge."
             },
-            {
-              "name": "id",
-              "type": "string",
-              "doc": "Badge ID."
-            },
+            { "name": "id", "type": "string", "doc": "Badge ID." },
             {
               "name": "info",
               "type": ["null", "string"],

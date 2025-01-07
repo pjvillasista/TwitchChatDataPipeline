@@ -3,6 +3,12 @@
   "name": "TwitchChatMessage",
   "fields": [
     { "name": "stream_id", "type": ["null", "string"], "default": null },
+    { "name": "subscription_id", "type": ["null", "string"], "default": null },
+    {
+      "name": "subscription_type",
+      "type": ["null", "string"],
+      "default": null
+    },
     { "name": "message_id", "type": "string" },
     { "name": "broadcaster_user_id", "type": "string" },
     { "name": "broadcaster_user_name", "type": "string" },
@@ -22,12 +28,12 @@
           "fields": [
             { "name": "set_id", "type": "string" },
             { "name": "id", "type": "string" },
-            { "name": "info", "type": "string" }
+            { "name": "info", "type": ["null", "string"], "default": null }
           ]
         }
-      }
+      },
+      "default": []
     },
-    { "name": "color", "type": "string" },
     { "name": "timestamp", "type": "string" }
   ]
 }
