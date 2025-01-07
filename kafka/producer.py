@@ -24,7 +24,7 @@ SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:29092")
 NOTIFICATION_TOPIC = os.getenv("NOTIFICATION_TOPIC", "notifications")
 CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
-TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "kaicenat")
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "ninja")
 TARGET_SCOPES = [AuthScope.USER_READ_CHAT]
 
 # Initialize Schema Registry Client
@@ -69,16 +69,17 @@ async def fetch_current_stream_info(twitch):
     return None, None
 
 
-async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
+async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id):
     """Callback function to handle chat messages."""
     try:
         chat_event_data = chat_event.to_dict()
+        broadcaster_id = chat_event_data["event"]["broadcaster_user_id"]
 
         # Prepare chat message data
         message_data = {
             "stream_id": stream_id,
             "message_id": chat_event_data["event"]["message_id"],
-            "broadcaster_user_id": chat_event_data["event"]["broadcaster_user_id"],
+            "broadcaster_user_id": broadcaster_id,
             "broadcaster_user_name": chat_event_data["event"]["broadcaster_user_name"],
             "broadcaster_user_login": chat_event_data["event"]["broadcaster_user_login"],
             "chatter_user_id": chat_event_data["event"]["chatter_user_id"],
@@ -97,7 +98,7 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
         producer.produce(
             topic=CHAT_TOPIC,
             value=serialized_msg_data,
-            key=message_data["broadcaster_user_id"],
+            key=broadcaster_id,
             callback=delivery_report,
         )
         print(f"Chat message published: {message_data}")
@@ -105,7 +106,7 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
         print(f"Error processing chat message: {e}")
 
 
-async def on_chat_notification(notification_event: ChannelChatNotificationEvent, stream_id: str):
+async def on_chat_notification(notification_event: ChannelChatNotificationEvent, stream_id):
     """Handle chat notifications and publish to Kafka."""
     try:
         notification_event_data = notification_event.to_dict()
@@ -141,56 +142,40 @@ async def on_chat_notification(notification_event: ChannelChatNotificationEvent,
         print(f"Error processing notification: {e}")
 
 
-async def get_broadcaster_id(twitch):
-    """Fetch the broadcaster ID for the target channel."""
-    user = await first(twitch.get_users(logins=[TARGET_CHANNEL]))
-    if user:
-        return user.id
-    else:
-        raise ValueError(f"Broadcaster '{TARGET_CHANNEL}' not found.")
-
-
 async def run():
-    # Initialize Twitch API with authentication helper
     twitch = await Twitch(APP_ID, APP_SECRET)
     helper = UserAuthenticationStorageHelper(twitch, TARGET_SCOPES)
     await helper.bind()
 
-    # Fetch the broadcaster ID for the target channel
-    broadcaster_user_id = await get_broadcaster_id(twitch)
-    user = await first(twitch.get_users())
+    # Fetch stream and broadcaster info
+    stream_id, broadcaster_user_id = await fetch_current_stream_info(twitch)
+    if not stream_id:
+        print("No active stream. Exiting.")
+        return
 
-    # Start the EventSub Websocket
+    # Start EventSub WebSocket
     eventsub = EventSubWebsocket(twitch)
     eventsub.start()
 
     try:
-        # Start WebSocket subscriptions as concurrent tasks
-        chat_notification_task = asyncio.create_task(
-            eventsub.listen_channel_chat_notification(
-                broadcaster_user_id=broadcaster_user_id,
-                user_id=user.id,
-                callback=on_chat_notification,
-            )
+        # Subscribe to chat notifications and messages
+        await eventsub.listen_channel_chat_notification(
+            broadcaster_user_id=broadcaster_user_id,
+            user_id=broadcaster_user_id,
+            callback=lambda event: on_chat_notification(event, stream_id),
         )
-        chat_message_task = asyncio.create_task(
-            eventsub.listen_channel_chat_message(
-                broadcaster_user_id=broadcaster_user_id,
-                user_id=user.id,
-                callback=on_chat_message,
-            )
+        await eventsub.listen_channel_chat_message(
+            broadcaster_user_id=broadcaster_user_id,
+            user_id=broadcaster_user_id,
+            callback=lambda event: on_chat_message(event, stream_id),
         )
 
-        # Keep the program running until manually interrupted
-        print("Listening for chat notifications and messages... Press Ctrl+C to stop.")
+        print("Listening for events... Press Ctrl+C to stop.")
         await asyncio.Event().wait()
 
     except KeyboardInterrupt:
         print("\nShutting down...")
     finally:
-        # Cancel tasks and perform cleanup
-        chat_notification_task.cancel()
-        chat_message_task.cancel()
         await eventsub.stop()
         await twitch.close()
         print("Shutdown complete.")
