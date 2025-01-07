@@ -13,6 +13,7 @@ from confluent_kafka.schema_registry.avro import AvroSerializer
 from confluent_kafka.serialization import SerializationContext, MessageField
 from dotenv import load_dotenv
 from datetime import datetime
+from functools import partial
 
 # Load environment variables
 load_dotenv()
@@ -24,7 +25,7 @@ SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:29092")
 NOTIFICATION_TOPIC = os.getenv("NOTIFICATION_TOPIC", "notifications")
 CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
-TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "ninja")
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "timthetatman")
 TARGET_SCOPES = [AuthScope.USER_READ_CHAT]
 
 # Initialize Schema Registry Client
@@ -69,17 +70,19 @@ async def fetch_current_stream_info(twitch):
     return None, None
 
 
-async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id):
+async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
     """Callback function to handle chat messages."""
     try:
+        # Extract chat message data
         chat_event_data = chat_event.to_dict()
-        broadcaster_id = chat_event_data["event"]["broadcaster_user_id"]
 
         # Prepare chat message data
         message_data = {
             "stream_id": stream_id,
+            "subscription_id": chat_event_data["event"].get("subscription_id"),
+            "subscription_type": chat_event_data["event"].get("subscription_type"),
             "message_id": chat_event_data["event"]["message_id"],
-            "broadcaster_user_id": broadcaster_id,
+            "broadcaster_user_id": chat_event_data["event"]["broadcaster_user_id"],
             "broadcaster_user_name": chat_event_data["event"]["broadcaster_user_name"],
             "broadcaster_user_login": chat_event_data["event"]["broadcaster_user_login"],
             "chatter_user_id": chat_event_data["event"]["chatter_user_id"],
@@ -95,10 +98,11 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id):
         serialized_msg_data = chat_serializer(
             message_data, SerializationContext(CHAT_TOPIC, MessageField.VALUE)
         )
+        key = f"{message_data['broadcaster_user_id']}_{message_data['stream_id']}"
         producer.produce(
             topic=CHAT_TOPIC,
             value=serialized_msg_data,
-            key=broadcaster_id,
+            key=key,
             callback=delivery_report,
         )
         print(f"Chat message published: {message_data}")
@@ -106,15 +110,17 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id):
         print(f"Error processing chat message: {e}")
 
 
-async def on_chat_notification(notification_event: ChannelChatNotificationEvent, stream_id):
+async def on_chat_notification(notification_event: ChannelChatNotificationEvent, stream_id: str):
     """Handle chat notifications and publish to Kafka."""
     try:
+        # Extract notification data
         notification_event_data = notification_event.to_dict()
 
         # Prepare notification data
         notification_data = {
             "stream_id": stream_id,
             "subscription_id": notification_event_data["subscription"]["id"],
+            "subscription_type": notification_event_data["subscription"]["type"],
             "broadcaster_user_id": notification_event_data["event"]["broadcaster_user_id"],
             "broadcaster_user_name": notification_event_data["event"]["broadcaster_user_name"],
             "broadcaster_user_login": notification_event_data["event"]["broadcaster_user_login"],
@@ -128,18 +134,21 @@ async def on_chat_notification(notification_event: ChannelChatNotificationEvent,
             "timestamp": datetime.now().isoformat(),
         }
 
+        # Serialize and publish notification data to Kafka
         serialized_notifications_data = notification_serializer(
             notification_data, SerializationContext(NOTIFICATION_TOPIC, MessageField.VALUE)
         )
+        key = f"{notification_event_data['broadcaster_user_id']}_{notification_event_data['stream_id']}"
         producer.produce(
             topic=NOTIFICATION_TOPIC,
             value=serialized_notifications_data,
-            key=notification_data["broadcaster_user_id"],
+            key=key,
             callback=delivery_report,
         )
         print(f"Notification published: {notification_data}")
     except Exception as e:
         print(f"Error processing notification: {e}")
+
 
 
 async def run():
@@ -152,6 +161,8 @@ async def run():
     if not stream_id:
         print("No active stream. Exiting.")
         return
+    
+    user = await first(twitch.get_users())
 
     # Start EventSub WebSocket
     eventsub = EventSubWebsocket(twitch)
@@ -161,14 +172,15 @@ async def run():
         # Subscribe to chat notifications and messages
         await eventsub.listen_channel_chat_notification(
             broadcaster_user_id=broadcaster_user_id,
-            user_id=broadcaster_user_id,
-            callback=lambda event: on_chat_notification(event, stream_id),
+            user_id=user.id,
+            callback=partial(on_chat_notification, stream_id=stream_id),
         )
+
         await eventsub.listen_channel_chat_message(
             broadcaster_user_id=broadcaster_user_id,
-            user_id=broadcaster_user_id,
-            callback=lambda event: on_chat_message(event, stream_id),
-        )
+            user_id=user.id,
+            callback=partial(on_chat_message, stream_id=stream_id),
+)
 
         print("Listening for events... Press Ctrl+C to stop.")
         await asyncio.Event().wait()
