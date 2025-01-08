@@ -15,8 +15,10 @@ from dotenv import load_dotenv
 from datetime import datetime
 from functools import partial
 
+
 # Load environment variables
 load_dotenv()
+
 
 # Constants
 APP_ID = os.getenv("APP_ID")
@@ -25,7 +27,7 @@ SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:29092")
 NOTIFICATION_TOPIC = os.getenv("NOTIFICATION_TOPIC", "notifications")
 CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
-TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "timthetatman")
+TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "caseoh_")
 TARGET_SCOPES = [AuthScope.USER_READ_CHAT]
 
 # Initialize Schema Registry Client
