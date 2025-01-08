@@ -30,6 +30,8 @@ CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
 TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "caseoh_")
 TARGET_SCOPES = [AuthScope.USER_READ_CHAT]
 CHANNEL_UPDATE_TOPIC = os.getenv("CHANNEL_UPDATE_TOPIC", "channel_updates")
+
+
 # Initialize Schema Registry Client
 schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
 
@@ -37,10 +39,10 @@ schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
 with open("schema_registry/notification_schema.avsc") as notification_schema_file:
     notification_schema = notification_schema_file.read()
 
-with open("schema_registry/message_schema.avsc") as chat_schema_file:
+with open("schema_registry/chat_message_schema.avsc") as chat_schema_file:
     chat_message_schema = chat_schema_file.read()
 
-with open("schema_registry/channel_update_schema.avsc") as schema_file:
+with open("schema_registry/channel_updates_schema.avsc") as schema_file:
     channel_update_schema = schema_file.read()
 
 # Initialize Avro Serializers
@@ -83,11 +85,12 @@ async def fetch_current_stream_info(twitch):
 async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
     """Callback function to handle chat messages."""
     try:
+        # Prepare chat message data
         chat_event_data = chat_event.to_dict()
         message_data = {
             "stream_id": stream_id,
-            "subscription_id": chat_event_data["subscription"]("id"),
-            "subscription_type": chat_event_data["subscription"]("type"),
+            "subscription_id": chat_event_data["subscription"].get("id"),
+            "subscription_type": chat_event_data["subscription"].get("type"),
             "message_id": chat_event_data["event"]["message_id"],
             "broadcaster_user_id": chat_event_data["event"]["broadcaster_user_id"],
             "broadcaster_user_name": chat_event_data["event"]["broadcaster_user_name"],
@@ -121,6 +124,8 @@ async def on_chat_notification(notification_event: ChannelChatNotificationEvent,
     """Handle chat notifications and publish to Kafka."""
     try:
         notification_event_data = notification_event.to_dict()
+
+        # Prepare notification data
         notification_data = {
             "stream_id": stream_id,
             "subscription_id": notification_event_data["subscription"]["id"],
@@ -153,13 +158,14 @@ async def on_chat_notification(notification_event: ChannelChatNotificationEvent,
         print(f"Error processing notification: {e}")
 
 
-async def on_channel_update(event: ChannelUpdateEvent):
+async def on_channel_update(event: ChannelUpdateEvent, stream_id: str):
     """Callback function to handle channel updates."""
     try:
         event_data = event.to_dict()
 
         # Prepare channel update data
         update_data = {
+            "stream_id": stream_id,
             "subscription_id": event_data["subscription"]["id"],
             "broadcaster_user_id": event_data["event"]["broadcaster_user_id"],
             "broadcaster_user_name": event_data["event"]["broadcaster_user_name"],
