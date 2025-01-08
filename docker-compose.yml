@@ -116,6 +116,7 @@ services:
 
 volumes:
   minio-data:
+
 networks:
   default:
     name: iceberg_net
