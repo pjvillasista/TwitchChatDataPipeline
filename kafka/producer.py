@@ -3,7 +3,7 @@ import json
 import asyncio
 from twitchAPI.twitch import Twitch
 from twitchAPI.eventsub.websocket import EventSubWebsocket
-from twitchAPI.object.eventsub import ChannelChatNotificationEvent, ChannelChatMessageEvent
+from twitchAPI.object.eventsub import ChannelChatNotificationEvent, ChannelChatMessageEvent, ChannelUpdateEvent
 from twitchAPI.helper import first
 from twitchAPI.oauth import UserAuthenticationStorageHelper
 from twitchAPI.type import AuthScope
@@ -29,7 +29,7 @@ NOTIFICATION_TOPIC = os.getenv("NOTIFICATION_TOPIC", "notifications")
 CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
 TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "caseoh_")
 TARGET_SCOPES = [AuthScope.USER_READ_CHAT]
-
+CHANNEL_UPDATE_TOPIC = os.getenv("CHANNEL_UPDATE_TOPIC", "channel_updates")
 # Initialize Schema Registry Client
 schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
 
@@ -40,9 +40,13 @@ with open("schema_registry/notification_schema.avsc") as notification_schema_fil
 with open("schema_registry/message_schema.avsc") as chat_schema_file:
     chat_message_schema = chat_schema_file.read()
 
+with open("schema_registry/channel_update_schema.avsc") as schema_file:
+    channel_update_schema = schema_file.read()
+
 # Initialize Avro Serializers
 notification_serializer = AvroSerializer(schema_registry_client, notification_schema)
 chat_serializer = AvroSerializer(schema_registry_client, chat_message_schema)
+channel_update_serializer = AvroSerializer(schema_registry_client, channel_update_schema)
 
 # Initialize Kafka Producer
 producer = Producer({"bootstrap.servers": KAFKA_BROKER})
@@ -149,6 +153,41 @@ async def on_chat_notification(notification_event: ChannelChatNotificationEvent,
         print(f"Error processing notification: {e}")
 
 
+async def on_channel_update(event: ChannelUpdateEvent):
+    """Callback function to handle channel updates."""
+    try:
+        event_data = event.to_dict()
+
+        # Prepare channel update data
+        update_data = {
+            "subscription_id": event_data["subscription"]["id"],
+            "broadcaster_user_id": event_data["event"]["broadcaster_user_id"],
+            "broadcaster_user_name": event_data["event"]["broadcaster_user_name"],
+            "title": event_data["event"]["title"],
+            "language": event_data["event"]["language"],
+            "category_id": event_data["event"]["category_id"],
+            "category_name": event_data["event"]["category_name"],
+            "content_classification_labels": event_data["event"].get("content_classification_labels", []),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        # Serialize and publish to Kafka
+        serialized_data = channel_update_serializer(
+            update_data, SerializationContext(CHANNEL_UPDATE_TOPIC, MessageField.VALUE)
+        )
+        producer.produce(
+            topic=CHANNEL_UPDATE_TOPIC,
+            value=serialized_data,
+            key=update_data["broadcaster_user_id"],
+            callback=delivery_report,
+        )
+        producer.flush()
+        print(f"Channel update published: {update_data}")
+
+    except Exception as e:
+        print(f"Error processing channel update: {e}")
+
+
 async def run():
     twitch = await Twitch(APP_ID, APP_SECRET)
     helper = UserAuthenticationStorageHelper(twitch, TARGET_SCOPES)
@@ -177,6 +216,10 @@ async def run():
                 broadcaster_user_id=broadcaster_user_id,
                 user_id=user.id,
                 callback=partial(on_chat_message, stream_id=stream_id),
+            ),
+            eventsub.listen_channel_update_v2(
+                broadcaster_user_id=broadcaster_user_id,
+                callback=partial(on_channel_update, stream_id=stream_id),
             ),
         )
 
