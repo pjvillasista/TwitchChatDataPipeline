@@ -1,51 +1,89 @@
+import os
+import json
 from confluent_kafka import Consumer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import SerializationContext, MessageField
+from dotenv import load_dotenv
 
-# Configuration
-SCHEMA_REGISTRY_URL = "http://localhost:8090"
-KAFKA_BROKER = "localhost:29092"
-KAFKA_TOPIC = "twitch_subscriptions"
+# Load environment variables
+load_dotenv()
+
+# Kafka and Schema Registry configuration
+SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:29092")
+NOTIFICATION_TOPIC = os.getenv("NOTIFICATION_TOPIC", "notifications")
+CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
+GROUP_ID = "twitch-data-consumer"
 
 # Initialize Schema Registry Client
 schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
 
-# Create Avro Deserializer
-avro_deserializer = AvroDeserializer(schema_registry_client)
+# Load schemas
+with open("../schema_registry/notification_schema.avsc") as notification_schema_file:
+    notification_schema = notification_schema_file.read()
 
-# Kafka Consumer Configuration
-consumer_config = {
-    "bootstrap.servers": KAFKA_BROKER,
-    "group.id": "twitch-subscriptions-group",
-    "auto.offset.reset": "earliest",  # Start reading from the beginning of the topic
-}
+with open("../schema_registry/message_schema.avsc") as chat_schema_file:
+    chat_message_schema = chat_schema_file.read()
+
+# Initialize Avro Deserializers
+notification_deserializer = AvroDeserializer(
+    schema_registry_client, notification_schema
+)
+chat_message_deserializer = AvroDeserializer(
+    schema_registry_client, chat_message_schema
+)
 
 # Initialize Kafka Consumer
-consumer = Consumer(consumer_config)
-consumer.subscribe([KAFKA_TOPIC])
+consumer = Consumer(
+    {
+        "bootstrap.servers": KAFKA_BROKER,
+        "group.id": GROUP_ID,
+        "auto.offset.reset": "earliest",
+    }
+)
 
-print(f"Listening for messages on topic '{KAFKA_TOPIC}'...")
 
-try:
-    while True:
-        msg = consumer.poll(1.0)  # Poll for messages every 1 second
+def consume_data(topic, deserializer):
+    """Consume data from the given Kafka topic using the provided deserializer."""
+    consumer.subscribe([topic])
+    print(f"Subscribed to topic: {topic}")
 
-        if msg is None:
-            continue
-        if msg.error():
-            print(f"Consumer error: {msg.error()}")
-            continue
+    try:
+        while True:
+            msg = consumer.poll(1.0)  # Poll for messages
+            if msg is None:
+                continue
+            if msg.error():
+                print(f"Consumer error: {msg.error()}")
+                continue
 
-        # Deserialize the message value using Avro
-        try:
-            value = avro_deserializer(msg.value(), SerializationContext(KAFKA_TOPIC, MessageField.VALUE))
-            print(f"Received message: {value}")
-        except Exception as e:
-            print(f"Error deserializing message: {e}")
+            # Deserialize the message value
+            data = deserializer(
+                msg.value(), SerializationContext(topic, MessageField.VALUE)
+            )
 
-except KeyboardInterrupt:
-    print("\nStopping consumer...")
+            # Ensure deserialized data is parsed and printed correctly
+            if data:
+                print(f"Consumed from {topic}: {json.dumps(data, indent=4)}")
+            else:
+                print(f"Warning: Received null data from topic {topic}")
 
-finally:
-    consumer.close()
+    except KeyboardInterrupt:
+        print("\nExiting consumer...")
+    finally:
+        consumer.close()
+
+
+if __name__ == "__main__":
+    print("Select topic to consume:")
+    print("1. Notifications")
+    print("2. Chat Messages")
+    choice = input("Enter choice (1 or 2): ")
+
+    if choice == "1":
+        consume_data(NOTIFICATION_TOPIC, notification_deserializer)
+    elif choice == "2":
+        consume_data(CHAT_TOPIC, chat_message_deserializer)
+    else:
+        print("Invalid choice. Exiting.")
