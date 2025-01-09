@@ -39,7 +39,7 @@ schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
 with open("schema_registry/notification_schema.avsc") as notification_schema_file:
     notification_schema = notification_schema_file.read()
 
-with open("schema_registry/chat_message_schema.avsc") as chat_schema_file:
+with open("schema_registry/message_schema.avsc") as chat_schema_file:
     chat_message_schema = chat_schema_file.read()
 
 with open("schema_registry/channel_updates_schema.avsc") as schema_file:
@@ -85,12 +85,14 @@ async def fetch_current_stream_info(twitch):
 async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
     """Callback function to handle chat messages."""
     try:
-        # Prepare chat message data
+        # Extract chat message data
         chat_event_data = chat_event.to_dict()
+
+        # Prepare chat message data
         message_data = {
             "stream_id": stream_id,
-            "subscription_id": chat_event_data["subscription"].get("id"),
-            "subscription_type": chat_event_data["subscription"].get("type"),
+            "subscription_id": chat_event_data["event"].get("subscription_id"),
+            "subscription_type": chat_event_data["event"].get("subscription_type"),
             "message_id": chat_event_data["event"]["message_id"],
             "broadcaster_user_id": chat_event_data["event"]["broadcaster_user_id"],
             "broadcaster_user_name": chat_event_data["event"]["broadcaster_user_name"],
@@ -104,6 +106,7 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
             "color": chat_event_data["event"].get("color", ""),
             "timestamp": datetime.now().isoformat(),
         }
+
 
         serialized_msg_data = chat_serializer(
             message_data, SerializationContext(CHAT_TOPIC, MessageField.VALUE)
@@ -161,19 +164,19 @@ async def on_chat_notification(notification_event: ChannelChatNotificationEvent,
 async def on_channel_update(event: ChannelUpdateEvent, stream_id: str):
     """Callback function to handle channel updates."""
     try:
-        event_data = event.to_dict()
+        updated_event_data = event.to_dict()
 
         # Prepare channel update data
         update_data = {
             "stream_id": stream_id,
-            "subscription_id": event_data["subscription"]["id"],
-            "broadcaster_user_id": event_data["event"]["broadcaster_user_id"],
-            "broadcaster_user_name": event_data["event"]["broadcaster_user_name"],
-            "title": event_data["event"]["title"],
-            "language": event_data["event"]["language"],
-            "category_id": event_data["event"]["category_id"],
-            "category_name": event_data["event"]["category_name"],
-            "content_classification_labels": event_data["event"].get("content_classification_labels", []),
+            "subscription_id": updated_event_data["subscription"]["id"],
+            "broadcaster_user_id": updated_event_data["event"]["broadcaster_user_id"],
+            "broadcaster_user_name": updated_event_data["event"]["broadcaster_user_name"],
+            "title": updated_event_data["event"]["title"],
+            "language": updated_event_data["event"]["language"],
+            "category_id": updated_event_data["event"]["category_id"],
+            "category_name": updated_event_data["event"]["category_name"],
+            "content_classification_labels": updated_event_data["event"].get("content_classification_labels", []),
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -181,10 +184,11 @@ async def on_channel_update(event: ChannelUpdateEvent, stream_id: str):
         serialized_data = channel_update_serializer(
             update_data, SerializationContext(CHANNEL_UPDATE_TOPIC, MessageField.VALUE)
         )
+        key = f"{updated_event_data['broadcaster_user_id']}_{updated_event_data['stream_id']}"
         producer.produce(
             topic=CHANNEL_UPDATE_TOPIC,
             value=serialized_data,
-            key=update_data["broadcaster_user_id"],
+            key=key,
             callback=delivery_report,
         )
         producer.flush()
