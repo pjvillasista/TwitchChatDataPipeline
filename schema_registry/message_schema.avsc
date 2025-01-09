@@ -9,15 +9,35 @@
       "type": ["null", "string"],
       "default": null
     },
-    { "name": "message_id", "type": "string" },
-    { "name": "broadcaster_user_id", "type": "string" },
-    { "name": "broadcaster_user_name", "type": "string" },
-    { "name": "broadcaster_user_login", "type": "string" },
-    { "name": "chatter_user_id", "type": "string" },
-    { "name": "chatter_user_name", "type": "string" },
-    { "name": "chatter_user_login", "type": "string" },
-    { "name": "message_text", "type": "string" },
-    { "name": "message_type", "type": "string" },
+    { "name": "message_id", "type": ["null", "string"], "default": null },
+    {
+      "name": "broadcaster_user_id",
+      "type": ["null", "string"],
+      "default": null
+    },
+    {
+      "name": "broadcaster_user_name",
+      "type": ["null", "string"],
+      "default": null
+    },
+    {
+      "name": "broadcaster_user_login",
+      "type": ["null", "string"],
+      "default": null
+    },
+    { "name": "chatter_user_id", "type": ["null", "string"], "default": null },
+    {
+      "name": "chatter_user_name",
+      "type": ["null", "string"],
+      "default": null
+    },
+    {
+      "name": "chatter_user_login",
+      "type": ["null", "string"],
+      "default": null
+    },
+    { "name": "message_text", "type": ["null", "string"], "default": null },
+    { "name": "message_type", "type": ["null", "string"], "default": null },
     {
       "name": "badges",
       "type": {
