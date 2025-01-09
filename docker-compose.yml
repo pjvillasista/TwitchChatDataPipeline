@@ -96,8 +96,8 @@ services:
       SPARK_DRIVER_MEMORY: 2G
       SPARK_EXECUTOR_MEMORY: 2G
       SPARK_SUBMIT_ARGS: >
-        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1,
-                    org.apache.kafka:kafka-clients:3.5.0
+        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,
+                    org.apache.kafka:kafka-clients:3.6.0
     ports:
       - "4040:4040"
       - "8888:8888"
@@ -108,7 +108,7 @@ services:
 
   # Kafka Connect for integrating Kafka with external systems
   kafka-connect:
-    image: confluentinc/cp-kafka-connect:latest
+    image: confluentinc/cp-kafka-connect-base:latest
     container_name: kafka-connect
     depends_on:
       - kafka
