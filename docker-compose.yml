@@ -7,6 +7,8 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
     ports:
       - "2181:2181"
+    networks:
+      - iceberg_net
 
   # Kafka for event streaming
   kafka:
@@ -23,6 +25,8 @@ services:
     ports:
       - "9092:9092"
       - "29092:29092"
+    networks:
+      - iceberg_net
 
   # Schema Registry for Avro schema management
   schema-registry:
@@ -34,28 +38,75 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
     ports:
-      - "8081:8081"
+      - "8090:8081"
+    networks:
+      - iceberg_net
 
-  # MinIO for object storage
+  spark-iceberg:
+    image: tabulario/spark-iceberg
+    container_name: spark-iceberg
+    build: spark/
+    depends_on:
+      - kafka
+      - rest
+      - minio
+    networks:
+      - iceberg_net
+    volumes:
+      - ./warehouse:/home/iceberg/warehouse
+      - ./notebooks:/home/iceberg/notebooks/notebooks
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - SPARK_MASTER=spark://spark-master:7077
+    ports:
+      - 8889:8888
+      - "10002:10000"
+      - "10003:10001"
+
+  rest:
+    image: tabulario/iceberg-rest
+    container_name: iceberg-rest
+    networks:
+      - iceberg_net
+    ports:
+      - 8182:8181
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - CATALOG_WAREHOUSE=s3://warehouse/
+      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+      - CATALOG_S3_ENDPOINT=http://minio:9000
+
   minio:
-    image: minio/minio:latest
+    image: minio/minio
     container_name: minio
     environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: password
-    command: server /data --console-address ":9001"
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+      - MINIO_DOMAIN=minio
+    networks:
+      iceberg_net:
+        aliases:
+          - warehouse.minio
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - ./minio-data:/data
+      - 9001:9001
+      - 9000:9000
+    command: ["server", "/data", "--console-address", ":9001"]
 
-  # MinIO Client for bucket configuration
   mc:
     depends_on:
       - minio
     image: minio/mc
     container_name: mc
+    networks:
+      - iceberg_net
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
     entrypoint: >
       /bin/sh -c "
       until (/usr/bin/mc config host add minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
@@ -65,81 +116,33 @@ services:
       tail -f /dev/null
       "
 
-  # Iceberg REST Catalog
-  iceberg-rest:
-    image: tabulario/iceberg-rest
-    container_name: iceberg-rest
+  spark-worker:
+    image: bitnami/spark:latest
+    container_name: spark-worker
     depends_on:
-      - minio
+      - spark-iceberg
     environment:
-      AWS_ACCESS_KEY_ID: admin
-      AWS_SECRET_ACCESS_KEY: password
-      CATALOG_WAREHOUSE: s3://warehouse/
-      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      CATALOG_S3_ENDPOINT: http://minio:9000
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    networks:
+      - iceberg_net
     ports:
-      - "8181:8181"
+      - 8083:8081
 
-  # Spark with Iceberg integration
-  spark:
-    image: tabulario/spark-iceberg
-    container_name: spark
-    depends_on:
-      - kafka
-      - minio
-      - iceberg-rest
+  spark-master:
+    image: bitnami/spark:latest
+    container_name: spark-master
     environment:
-      AWS_ACCESS_KEY_ID: admin
-      AWS_SECRET_ACCESS_KEY: password
-      SPARK_DEFAULTS: |
-        spark.sql.extensions                    org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
-        spark.sql.catalog.iceberg               org.apache.iceberg.spark.SparkCatalog
-        spark.sql.catalog.iceberg.catalog-impl  org.apache.iceberg.rest.RESTCatalog
-        spark.sql.catalog.iceberg.uri           http://iceberg-rest:8181
-        spark.sql.catalog.iceberg.io-impl       org.apache.iceberg.aws.s3.S3FileIO
-        spark.sql.catalog.iceberg.warehouse     s3://warehouse/
-        spark.sql.catalog.iceberg.s3.endpoint   http://minio:9000
-        spark.sql.catalog.iceberg.s3.path-style-access  true
-        spark.sql.defaultCatalog                iceberg
-      SPARK_DRIVER_MEMORY: 2G
-      SPARK_EXECUTOR_MEMORY: 2G
-      SPARK_SUBMIT_ARGS: >
-        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,
-                    org.apache.spark:spark-avro_2.12:3.5.1
+      - SPARK_MODE=master
+    networks:
+      - iceberg_net
     ports:
-      - "4040:4040"
-      - "8080:8080"
-    volumes:
-      - ./warehouse:/home/iceberg/warehouse
-      - ./notebooks:/home/iceberg/notebooks
-      - ./scripts:/home/iceberg/scripts
-      - ./data:/home/iceberg/data
-
-  # Kafka Connect for integrating Kafka with external systems
-  kafka-connect:
-    image: confluentinc/cp-kafka-connect-base:latest
-    container_name: kafka-connect
-    depends_on:
-      - kafka
-      - schema-registry
-    environment:
-      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
-      CONNECT_GROUP_ID: "kafka-connect-group"
-      CONNECT_CONFIG_STORAGE_TOPIC: "connect_configs"
-      CONNECT_OFFSET_STORAGE_TOPIC: "connect_offsets"
-      CONNECT_STATUS_STORAGE_TOPIC: "connect_statuses"
-      CONNECT_KEY_CONVERTER: "io.confluent.connect.avro.AvroConverter"
-      CONNECT_VALUE_CONVERTER: "io.confluent.connect.avro.AvroConverter"
-      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_PLUGIN_PATH: "/usr/share/java"
-      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
-    ports:
-      - "8083:8083"
+      - 7077:7077
+      - 8080:8080
 
 volumes:
   minio-data:
 
 networks:
-  default:
-    name: iceberg_net
+  iceberg_net:
