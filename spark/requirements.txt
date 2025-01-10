@@ -1,0 +1,7 @@
+jupyter
+twitch_api
+pyiceberg
+jupysql
+pandas
+twitchAPI
+pyspark
