@@ -1,22 +1,17 @@
 #!/bin/bash
 
-# Set up Spark environment variables
-export SPARK_HOME="/opt/spark"
-export PATH="$SPARK_HOME/bin:$SPARK_HOME/sbin:$PATH"
+# Set Spark configurations dynamically
+echo "Setting up Spark configurations..."
+export SPARK_HOME=/opt/spark
 
-# Ensure all required directories exist
-mkdir -p /app/logs /app/checkpoints
-
-# Start Spark with the application
-if [[ "$1" == "pyspark" ]]; then
-    echo "Starting PySpark shell..."
-    exec pyspark
-elif [[ "$1" == "submit" ]]; then
-    echo "Submitting Spark job..."
-    shift  # Remove 'submit' from arguments
-    exec spark-submit "$@"
+# Start Spark Master or Worker based on mode
+if [[ "$SPARK_MODE" == "master" ]]; then
+  echo "Starting Spark Master..."
+  /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host 0.0.0.0
+elif [[ "$SPARK_MODE" == "worker" ]]; then
+  echo "Starting Spark Worker..."
+  /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker $SPARK_MASTER_URL
 else
-    echo "Unknown command: $1"
-    echo "Usage: ./entrypoint.sh [pyspark|submit <script.py> <args>]"
-    exit 1
+  echo "Starting Spark in standalone mode for batch or notebook execution..."
+  /opt/spark/bin/spark-submit "$@"
 fi

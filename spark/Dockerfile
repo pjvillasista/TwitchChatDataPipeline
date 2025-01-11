@@ -1,46 +1,29 @@
-# Base Python image
-FROM python:3.10-bullseye
+# Use tabulario/spark-iceberg as the base image
+FROM tabulario/spark-iceberg:latest
 
-# Install required dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-11-jdk \
-    curl \
-    unzip \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Set environment variables for AWS and MinIO
+ENV AWS_ACCESS_KEY_ID=admin
+ENV AWS_SECRET_ACCESS_KEY=password
+ENV AWS_REGION=us-east-1
 
-# Set environment variables
-ENV SPARK_HOME="/opt/spark"
-ENV SPARK_VERSION=3.5.2
-ENV ICEBERG_VERSION=1.6.0
-ENV PATH="$SPARK_HOME/bin:$SPARK_HOME/sbin:$PATH"
+# Add required JARs for Kafka, Avro, and Iceberg integration
+ADD https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.1/spark-sql-kafka-0-10_2.12-3.5.1.jar /opt/spark/jars/
+ADD https://repo1.maven.org/maven2/org/apache/spark/spark-avro_2.12/3.5.1/spark-avro_2.12-3.5.1.jar /opt/spark/jars/
+ADD https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/1.3.0/iceberg-spark-runtime-3.5_2.12-1.3.0.jar /opt/spark/jars/
+ADD https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-rest-client/1.3.0/iceberg-rest-client-1.3.0.jar /opt/spark/jars/
 
-# Download and install Spark
-RUN mkdir -p ${SPARK_HOME} \
-    && curl https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz -o spark.tgz \
-    && tar -xzf spark.tgz --strip-components=1 -C ${SPARK_HOME} \
-    && rm spark.tgz
+# Copy configuration files
+COPY spark-defaults.conf /opt/spark/conf/spark-defaults.conf
+COPY entrypoint.sh /opt/spark/bin/entrypoint.sh
+RUN chmod +x /opt/spark/bin/entrypoint.sh
 
-# Add Iceberg Spark runtime JAR
-RUN mkdir -p ${SPARK_HOME}/jars \
-    && curl https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/${ICEBERG_VERSION}/iceberg-spark-runtime-3.5_2.12-${ICEBERG_VERSION}.jar -Lo ${SPARK_HOME}/jars/iceberg-spark-runtime.jar
-
-# Add Iceberg AWS bundle
-RUN curl https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/${ICEBERG_VERSION}/iceberg-aws-bundle-${ICEBERG_VERSION}.jar -Lo ${SPARK_HOME}/jars/iceberg-aws-bundle.jar
+# Copy custom scripts and notebooks
+COPY scripts /opt/spark/scripts
+COPY notebooks /opt/spark/notebooks
 
 # Install Python dependencies
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY requirements.txt /opt/spark/
+RUN pip install -r /opt/spark/requirements.txt
 
-# Set working directory
-WORKDIR /app
-
-# Copy entrypoint script
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
-
-# Copy Spark configuration
-COPY spark-defaults.conf ${SPARK_HOME}/conf/spark-defaults.conf
-
-# Entrypoint
-ENTRYPOINT ["./entrypoint.sh"]
-CMD ["pyspark"]
+# Set entrypoint
+ENTRYPOINT ["/opt/spark/bin/entrypoint.sh"]

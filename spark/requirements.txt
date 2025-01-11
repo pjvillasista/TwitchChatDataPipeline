@@ -1,7 +1,4 @@
-jupyter
-twitch_api
-pyiceberg
-jupysql
-pandas
-twitchAPI
-pyspark
+pyspark==3.5.1
+boto3==1.28.12
+pyarrow==12.0.1
+fastavro==1.8.0
