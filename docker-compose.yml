@@ -25,6 +25,8 @@ services:
     ports:
       - "9092:9092"
       - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     networks:
       - iceberg_net
 
@@ -143,6 +145,8 @@ services:
 
 volumes:
   minio-data:
+  kafka-data:
+    driver: local
 
 networks:
   iceberg_net:
