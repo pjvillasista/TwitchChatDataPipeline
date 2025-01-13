@@ -1,5 +1,5 @@
 import os
-import json
+import random
 import asyncio
 from twitchAPI.twitch import Twitch
 from twitchAPI.eventsub.websocket import EventSubWebsocket
@@ -91,8 +91,8 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
         # Prepare chat message data
         message_data = {
             "stream_id": stream_id,
-            "subscription_id": chat_event_data["event"].get("subscription_id"),
-            "subscription_type": chat_event_data["event"].get("subscription_type"),
+            "subscription_id": chat_event_data["subscription"].get("id"),
+            "subscription_type": chat_event_data["subscription"].get("type"),
             "message_id": chat_event_data["event"]["message_id"],
             "broadcaster_user_id": chat_event_data["event"]["broadcaster_user_id"],
             "broadcaster_user_name": chat_event_data["event"]["broadcaster_user_name"],
@@ -111,11 +111,11 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
         serialized_msg_data = chat_serializer(
             message_data, SerializationContext(CHAT_TOPIC, MessageField.VALUE)
         )
-        key = f"{message_data['broadcaster_user_id']}_{message_data['stream_id']}"
+        partition_key = f"{message_data['broadcaster_user_id']}_{message_data['stream_id']}"
         producer.produce(
             topic=CHAT_TOPIC,
             value=serialized_msg_data,
-            key=key,
+            key=partition_key,
             callback=delivery_report,
         )
         print(f"Chat message published: {message_data}")
@@ -149,11 +149,12 @@ async def on_chat_notification(notification_event: ChannelChatNotificationEvent,
         serialized_notifications_data = notification_serializer(
             notification_data, SerializationContext(NOTIFICATION_TOPIC, MessageField.VALUE)
         )
-        key = f"{notification_data['broadcaster_user_id']}_{notification_data['stream_id']}"
+        partition_key = f"{notification_event_data['broadcaster_user_id']}_{notification_event_data['stream_id']}"
+
         producer.produce(
             topic=NOTIFICATION_TOPIC,
             value=serialized_notifications_data,
-            key=key,
+            key=partition_key,
             callback=delivery_report,
         )
         print(f"Notification published: {notification_data}")
@@ -184,11 +185,11 @@ async def on_channel_update(event: ChannelUpdateEvent, stream_id: str):
         serialized_data = channel_update_serializer(
             update_data, SerializationContext(CHANNEL_UPDATE_TOPIC, MessageField.VALUE)
         )
-        key = f"{updated_event_data['broadcaster_user_id']}_{updated_event_data['stream_id']}"
+        partition_key = f"{updated_event_data['broadcaster_user_id']}_{updated_event_data['stream_id']}"
         producer.produce(
             topic=CHANNEL_UPDATE_TOPIC,
             value=serialized_data,
-            key=key,
+            key=partition_key,
             callback=delivery_report,
         )
         producer.flush()

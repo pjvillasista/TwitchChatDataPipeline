@@ -1,89 +1,55 @@
-import os
-import json
 from confluent_kafka import Consumer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import SerializationContext, MessageField
-from dotenv import load_dotenv
+import os
 
-# Load environment variables
-load_dotenv()
-
-# Kafka and Schema Registry configuration
-SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
-KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:29092")
-NOTIFICATION_TOPIC = os.getenv("NOTIFICATION_TOPIC", "notifications")
-CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
-GROUP_ID = "twitch-data-consumer"
+# Configuration
+KAFKA_BROKER = "localhost:29092"
+SCHEMA_REGISTRY_URL = "http://localhost:8081"
+TOPIC = "twitch_chat_messages"
 
 # Initialize Schema Registry Client
 schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
 
-# Load schemas
-with open("../schema_registry/notification_schema.avsc") as notification_schema_file:
-    notification_schema = notification_schema_file.read()
+# Fetch the latest schema for the topic
+subject = f"{TOPIC}-value"
+schema = schema_registry_client.get_latest_version(subject).schema.schema_str
 
-with open("../schema_registry/message_schema.avsc") as chat_schema_file:
-    chat_message_schema = chat_schema_file.read()
+# Initialize Avro Deserializer
+avro_deserializer = AvroDeserializer(schema_registry_client, schema)
 
-# Initialize Avro Deserializers
-notification_deserializer = AvroDeserializer(
-    schema_registry_client, notification_schema
-)
-chat_message_deserializer = AvroDeserializer(
-    schema_registry_client, chat_message_schema
-)
+# Configure Kafka Consumer
+consumer_conf = {
+    "bootstrap.servers": KAFKA_BROKER,
+    "group.id": "test-group",
+    "auto.offset.reset": "earliest",
+}
+consumer = Consumer(consumer_conf)
 
-# Initialize Kafka Consumer
-consumer = Consumer(
-    {
-        "bootstrap.servers": KAFKA_BROKER,
-        "group.id": GROUP_ID,
-        "auto.offset.reset": "earliest",
-    }
-)
+# Consume and log messages
+consumer.subscribe([TOPIC])
 
+print(f"Listening to topic: {TOPIC}")
+try:
+    while True:
+        msg = consumer.poll(1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            print(f"Consumer error: {msg.error()}")
+            continue
 
-def consume_data(topic, deserializer):
-    """Consume data from the given Kafka topic using the provided deserializer."""
-    consumer.subscribe([topic])
-    print(f"Subscribed to topic: {topic}")
+        # Log raw message
+        print(f"Raw message: {msg.value()}")
 
-    try:
-        while True:
-            msg = consumer.poll(1.0)  # Poll for messages
-            if msg is None:
-                continue
-            if msg.error():
-                print(f"Consumer error: {msg.error()}")
-                continue
-
-            # Deserialize the message value
-            data = deserializer(
-                msg.value(), SerializationContext(topic, MessageField.VALUE)
-            )
-
-            # Ensure deserialized data is parsed and printed correctly
-            if data:
-                print(f"Consumed from {topic}: {json.dumps(data, indent=4)}")
-            else:
-                print(f"Warning: Received null data from topic {topic}")
-
-    except KeyboardInterrupt:
-        print("\nExiting consumer...")
-    finally:
-        consumer.close()
-
-
-if __name__ == "__main__":
-    print("Select topic to consume:")
-    print("1. Notifications")
-    print("2. Chat Messages")
-    choice = input("Enter choice (1 or 2): ")
-
-    if choice == "1":
-        consume_data(NOTIFICATION_TOPIC, notification_deserializer)
-    elif choice == "2":
-        consume_data(CHAT_TOPIC, chat_message_deserializer)
-    else:
-        print("Invalid choice. Exiting.")
+        # Deserialize and log data
+        try:
+            deserialized_data = avro_deserializer(msg.value(), SerializationContext(TOPIC, MessageField.VALUE))
+            print(f"Deserialized data: {deserialized_data}")
+        except Exception as e:
+            print(f"Deserialization error: {e}")
+except KeyboardInterrupt:
+    print("Exiting consumer.")
+finally:
+    consumer.close()
