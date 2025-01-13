@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "ChannelUpdate",
+  "fields": [
+    { "name": "stream_id", "type": "string" },
+    { "name": "subscription_id", "type": "string" },
+    { "name": "broadcaster_user_id", "type": "string" },
+    { "name": "broadcaster_user_name", "type": "string" },
+    { "name": "title", "type": "string" },
+    { "name": "language", "type": "string" },
+    { "name": "category_id", "type": "string" },
+    { "name": "category_name", "type": "string" },
+    {
+      "name": "content_classification_labels",
+      "type": { "type": "array", "items": "string" },
+      "default": []
+    },
+    { "name": "timestamp", "type": "string" }
+  ]
+}
