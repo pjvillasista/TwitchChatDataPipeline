@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # Zookeeper for Kafka
   zookeeper:
@@ -30,7 +28,7 @@ services:
     networks:
       - iceberg_net
 
-  # Kafka UI
+  # Kafka UI (Provectus)
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
@@ -61,14 +59,16 @@ services:
 
   # Flink JobManager
   flink-jobmanager:
-    image: flink:python
+    build:
+      context: ./flink # Custom Dockerfile is in the flink/ directory
+      dockerfile: Dockerfile
     container_name: flink-jobmanager
     command: jobmanager
-    environment:
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address=flink-jobmanager
+    volumes:
+      - ./flink/conf:/opt/flink/conf
+      - ./flink/python-scripts:/opt/flink/python-scripts
     ports:
-      - "8082:8081"
+      - "8082:8082" # Flink JobManager Web UI
     depends_on:
       - kafka
     networks:
@@ -76,19 +76,60 @@ services:
 
   # Flink TaskManager
   flink-taskmanager:
-    image: flink:python
+    build:
+      context: ./flink # Custom Dockerfile is in the flink/ directory
+      dockerfile: Dockerfile
     container_name: flink-taskmanager
     command: taskmanager
     depends_on:
       - flink-jobmanager
-    environment:
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address=flink-jobmanager
-        taskmanager.numberOfTaskSlots=4
+    volumes:
+      - ./flink/conf:/opt/flink/conf
+      - ./flink/python-scripts:/opt/flink/python-scripts
     networks:
       - iceberg_net
 
-  # MinIO for object storage
+  # Spark-Iceberg
+  spark-iceberg:
+    image: tabulario/spark-iceberg
+    container_name: spark-iceberg
+    build: spark/
+    depends_on:
+      - kafka
+      - rest
+      - minio
+    networks:
+      - iceberg_net
+    volumes:
+      - ./warehouse:/home/iceberg/warehouse
+      - ./notebooks:/home/iceberg/notebooks/notebooks
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - SPARK_MASTER=spark://spark-master:7077
+    ports:
+      - "8888:8888"
+      - "10000:10000"
+      - "10001:10001"
+
+  # Iceberg REST Catalog
+  rest:
+    image: tabulario/iceberg-rest
+    container_name: iceberg-rest
+    networks:
+      - iceberg_net
+    ports:
+      - "8181:8181"
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - CATALOG_WAREHOUSE=s3://warehouse/
+      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+      - CATALOG_S3_ENDPOINT=http://minio:9000
+
+  # MinIO Storage
   minio:
     image: minio/minio
     container_name: minio
@@ -96,12 +137,14 @@ services:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
       - MINIO_DOMAIN=minio
+    networks:
+      iceberg_net:
+        aliases:
+          - warehouse.minio
     ports:
       - "9001:9001"
       - "9000:9000"
     command: ["server", "/data", "--console-address", ":9001"]
-    networks:
-      - iceberg_net
 
   # MinIO Client
   mc:
@@ -123,6 +166,33 @@ services:
       /usr/bin/mc policy set public minio/warehouse;
       tail -f /dev/null
       "
+
+  # Spark Worker
+  spark-worker:
+    image: bitnami/spark:latest
+    container_name: spark-worker
+    depends_on:
+      - spark-iceberg
+    environment:
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    networks:
+      - iceberg_net
+    ports:
+      - "8083:8081" # Adjusted for Spark Worker UI
+
+  # Spark Master
+  spark-master:
+    image: bitnami/spark:latest
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+    networks:
+      - iceberg_net
+    ports:
+      - "7077:7077"
+      - "8084:8080" # Adjusted for Spark Master UI
 
 volumes:
   minio-data:
