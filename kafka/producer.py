@@ -1,5 +1,4 @@
 import os
-import random
 import asyncio
 from twitchAPI.twitch import Twitch
 from twitchAPI.eventsub.websocket import EventSubWebsocket
@@ -15,10 +14,8 @@ from dotenv import load_dotenv
 from datetime import datetime
 from functools import partial
 
-
 # Load environment variables
 load_dotenv()
-
 
 # Constants
 APP_ID = os.getenv("APP_ID")
@@ -27,10 +24,9 @@ SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:29092")
 NOTIFICATION_TOPIC = os.getenv("NOTIFICATION_TOPIC", "notifications")
 CHAT_TOPIC = os.getenv("CHAT_TOPIC", "chat_messages")
+CHANNEL_UPDATE_TOPIC = os.getenv("CHANNEL_UPDATE_TOPIC", "channel_updates")
 TARGET_CHANNEL = os.getenv("TARGET_CHANNEL", "caseoh_")
 TARGET_SCOPES = [AuthScope.USER_READ_CHAT]
-CHANNEL_UPDATE_TOPIC = os.getenv("CHANNEL_UPDATE_TOPIC", "channel_updates")
-
 
 # Initialize Schema Registry Client
 schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
@@ -85,7 +81,6 @@ async def fetch_current_stream_info(twitch):
 async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
     """Callback function to handle chat messages."""
     try:
-        # Extract chat message data
         chat_event_data = chat_event.to_dict()
 
         # Prepare chat message data
@@ -94,19 +89,18 @@ async def on_chat_message(chat_event: ChannelChatMessageEvent, stream_id: str):
             "subscription_id": chat_event_data["subscription"].get("id"),
             "subscription_type": chat_event_data["subscription"].get("type"),
             "message_id": chat_event_data["event"]["message_id"],
-            "broadcaster_user_id": chat_event_data["event"]["broadcaster_user_id"],
-            "broadcaster_user_name": chat_event_data["event"]["broadcaster_user_name"],
-            "broadcaster_user_login": chat_event_data["event"]["broadcaster_user_login"],
-            "chatter_user_id": chat_event_data["event"]["chatter_user_id"],
-            "chatter_user_name": chat_event_data["event"]["chatter_user_name"],
-            "chatter_user_login": chat_event_data["event"]["chatter_user_login"],
-            "message_text": chat_event_data["event"]["message"]["text"],
-            "message_type": chat_event_data["event"]["message"]["fragments"][0]["type"],
+            "broadcaster_user_id": chat_event_data["event"].get("broadcaster_user_id"),
+            "broadcaster_user_name": chat_event_data["event"].get("broadcaster_user_name", ""),
+            "broadcaster_user_login": chat_event_data["event"].get("broadcaster_user_login", ""),
+            "chatter_user_id": chat_event_data["event"].get("chatter_user_id", ""),
+            "chatter_user_name": chat_event_data["event"].get("chatter_user_name", ""),
+            "chatter_user_login": chat_event_data["event"].get("chatter_user_login", ""),
+            "message_text": chat_event_data["event"].get("message", {}).get("text", ""),
+            "message_type": chat_event_data["event"].get("message", {}).get("fragments", [{}])[0].get("type", ""),
             "badges": chat_event_data["event"].get("badges", []),
             "color": chat_event_data["event"].get("color", ""),
             "timestamp": datetime.now().isoformat(),
         }
-
 
         serialized_msg_data = chat_serializer(
             message_data, SerializationContext(CHAT_TOPIC, MessageField.VALUE)
@@ -133,23 +127,27 @@ async def on_chat_notification(notification_event: ChannelChatNotificationEvent,
             "stream_id": stream_id,
             "subscription_id": notification_event_data["subscription"]["id"],
             "subscription_type": notification_event_data["subscription"]["type"],
-            "broadcaster_user_id": notification_event_data["event"]["broadcaster_user_id"],
-            "broadcaster_user_name": notification_event_data["event"]["broadcaster_user_name"],
-            "broadcaster_user_login": notification_event_data["event"]["broadcaster_user_login"],
-            "chatter_user_id": notification_event_data["event"]["chatter_user_id"],
-            "chatter_user_name": notification_event_data["event"]["chatter_user_name"],
-            "message_id": notification_event_data["event"]["message_id"],
-            "message_text": notification_event_data["event"]["message"]["text"],
+            "broadcaster_user_id": notification_event_data["event"].get("broadcaster_user_id"),
+            "broadcaster_user_name": notification_event_data["event"].get("broadcaster_user_name", ""),
+            "broadcaster_user_login": notification_event_data["event"].get("broadcaster_user_login", ""),
+            "chatter_user_id": notification_event_data["event"].get("chatter_user_id", ""),
+            "chatter_user_name": notification_event_data["event"].get("chatter_user_name", ""),
+            "message_id": notification_event_data["event"].get("message_id", ""),
+            "message_text": notification_event_data["event"].get("message", {}).get("text", ""),
             "notice_type": notification_event_data["event"].get("notice_type"),
             "badges": notification_event_data["event"].get("badges", []),
-            "resub": notification_event_data["event"].get("resub"),
+            "resub": notification_event_data["event"].get("resub", {}),
             "timestamp": datetime.now().isoformat(),
         }
+
+        if not notification_data["broadcaster_user_id"]:
+            print(f"Missing 'broadcaster_user_id'. Event: {notification_event_data}")
+            return
 
         serialized_notifications_data = notification_serializer(
             notification_data, SerializationContext(NOTIFICATION_TOPIC, MessageField.VALUE)
         )
-        partition_key = f"{notification_event_data['broadcaster_user_id']}_{notification_event_data['stream_id']}"
+        partition_key = f"{notification_data['broadcaster_user_id']}_{stream_id}"
 
         producer.produce(
             topic=NOTIFICATION_TOPIC,
@@ -171,21 +169,21 @@ async def on_channel_update(event: ChannelUpdateEvent, stream_id: str):
         update_data = {
             "stream_id": stream_id,
             "subscription_id": updated_event_data["subscription"]["id"],
-            "broadcaster_user_id": updated_event_data["event"]["broadcaster_user_id"],
-            "broadcaster_user_name": updated_event_data["event"]["broadcaster_user_name"],
-            "title": updated_event_data["event"]["title"],
-            "language": updated_event_data["event"]["language"],
-            "category_id": updated_event_data["event"]["category_id"],
-            "category_name": updated_event_data["event"]["category_name"],
+            "broadcaster_user_id": updated_event_data["event"].get("broadcaster_user_id"),
+            "broadcaster_user_name": updated_event_data["event"].get("broadcaster_user_name", ""),
+            "title": updated_event_data["event"].get("title", ""),
+            "language": updated_event_data["event"].get("language", ""),
+            "category_id": updated_event_data["event"].get("category_id", ""),
+            "category_name": updated_event_data["event"].get("category_name", ""),
             "content_classification_labels": updated_event_data["event"].get("content_classification_labels", []),
             "timestamp": datetime.now().isoformat(),
         }
 
-        # Serialize and publish to Kafka
         serialized_data = channel_update_serializer(
             update_data, SerializationContext(CHANNEL_UPDATE_TOPIC, MessageField.VALUE)
         )
-        partition_key = f"{updated_event_data['broadcaster_user_id']}_{updated_event_data['stream_id']}"
+        partition_key = f"{updated_event_data['broadcaster_user_id']}_{stream_id}"
+
         producer.produce(
             topic=CHANNEL_UPDATE_TOPIC,
             value=serialized_data,
@@ -194,7 +192,6 @@ async def on_channel_update(event: ChannelUpdateEvent, stream_id: str):
         )
         producer.flush()
         print(f"Channel update published: {update_data}")
-
     except Exception as e:
         print(f"Error processing channel update: {e}")
 
@@ -209,7 +206,7 @@ async def run():
     if not stream_id:
         print("No active stream. Exiting.")
         return
-    
+
     user = await first(twitch.get_users())
 
     # Start EventSub WebSocket
