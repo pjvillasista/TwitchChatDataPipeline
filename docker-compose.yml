@@ -1,7 +1,7 @@
 services:
   # Zookeeper for Kafka
   zookeeper:
-    image: confluentinc/cp-zookeeper:latest
+    image: confluentinc/cp-zookeeper:7.6.0
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
@@ -12,7 +12,7 @@ services:
 
   # Kafka for event streaming
   kafka:
-    image: confluentinc/cp-enterprise-kafka:latest
+    image: confluentinc/cp-kafka:7.6.0
     container_name: kafka
     depends_on:
       - zookeeper
@@ -45,7 +45,7 @@ services:
 
   # Schema Registry for Avro schema management
   schema-registry:
-    image: confluentinc/cp-schema-registry:latest
+    image: confluentinc/cp-schema-registry:7.6.0
     container_name: schema-registry
     depends_on:
       - kafka
@@ -68,6 +68,13 @@ services:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
       - ./flink/conf/core-site.xml:/opt/flink/conf/core-site.xml
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_ENDPOINT=http://minio.minio:9000
+      - S3_PATH_STYLE_ACCESS=true
     ports:
       - "8082:8082" # Flink JobManager Web UI
     depends_on:
@@ -89,12 +96,19 @@ services:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
       - ./flink/conf/core-site.xml:/opt/flink/conf/core-site.xml
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_ENDPOINT=http://minio.minio:9000
+      - S3_PATH_STYLE_ACCESS=true
     networks:
       - iceberg_net
 
   # Spark-Iceberg
   spark-iceberg:
-    image: tabulario/spark-iceberg
+    image: tabulario/spark-iceberg:latest
     container_name: spark-iceberg
     build: spark/
     depends_on:
@@ -140,6 +154,8 @@ services:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
       - MINIO_DOMAIN=minio
+      - MINIO_REGION_NAME=us-east-1
+      - MINIO_REGION=us-east-1
     networks:
       iceberg_net:
         aliases:
@@ -175,7 +191,7 @@ services:
 
   # Spark Worker
   spark-worker:
-    image: bitnami/spark:latest
+    image: bitnami/spark:3.5
     container_name: spark-worker
     depends_on:
       - spark-iceberg
@@ -190,7 +206,7 @@ services:
 
   # Spark Master
   spark-master:
-    image: bitnami/spark:latest
+    image: bitnami/spark:3.5
     container_name: spark-master
     environment:
       - SPARK_MODE=master
