@@ -67,10 +67,12 @@ services:
     volumes:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
+      - ./flink/conf/core-site.xml:/opt/flink/conf/core-site.xml
     ports:
       - "8082:8082" # Flink JobManager Web UI
     depends_on:
       - kafka
+      - minio
     networks:
       - iceberg_net
 
@@ -86,6 +88,7 @@ services:
     volumes:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
+      - ./flink/conf/core-site.xml:/opt/flink/conf/core-site.xml
     networks:
       - iceberg_net
 
@@ -141,6 +144,9 @@ services:
       iceberg_net:
         aliases:
           - warehouse.minio
+    volumes:
+      - ./minio-data:/data
+      - ./minio-config:/root/.minio # Persist MinIO configuration
     ports:
       - "9001:9001"
       - "9000:9000"
