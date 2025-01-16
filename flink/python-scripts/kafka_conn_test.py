@@ -38,36 +38,41 @@ def create_kafka_source(t_env):
     t_env.execute_sql(chat_source_ddl)
 
 def create_iceberg_catalog(t_env):
-    """Create Iceberg catalog using Hadoop catalog"""
+    """Create Iceberg catalog using REST catalog"""
     
-    # Set Hadoop S3A configurations
+    # Set configuration for REST catalog
     config = t_env.get_config().get_configuration()
-    config.set_string("fs.s3a.access.key", "admin")
-    config.set_string("fs.s3a.secret.key", "password")
-    config.set_string("fs.s3a.endpoint", "http://minio:9000")
-    config.set_string("fs.s3a.path.style.access", "true")
+    config.set_string("table.exec.iceberg.fallback-snapshot-id", "-1")
     
+    # Create REST catalog
     catalog_ddl = """
-    CREATE CATALOG hadoop_catalog WITH (
+    CREATE CATALOG rest_catalog WITH (
         'type'='iceberg',
-        'catalog-type'='hadoop',
-        'warehouse'='s3a://warehouse/twitch'
+        'catalog-impl'='org.apache.iceberg.rest.RESTCatalog',
+        'uri'='http://rest:8181',
+        'warehouse'='s3://warehouse',
+        'io-impl'='org.apache.iceberg.aws.s3.S3FileIO',
+        's3.endpoint'='http://minio:9000',
+        's3.path-style-access'='true',
+        's3.access-key-id'='admin',
+        's3.secret-access-key'='password'
     )
     """
     
-    print("\nCreating Iceberg catalog...")
+    print("\nCreating Iceberg REST catalog...")
     t_env.execute_sql(catalog_ddl)
-    t_env.use_catalog("hadoop_catalog")
-    
-    print("\nCreating default database...")
-    t_env.execute_sql("CREATE DATABASE IF NOT EXISTS `default`")
-    t_env.use_database("default")
+    t_env.use_catalog("rest_catalog")
 
 def create_iceberg_sink(t_env):
     """Create Iceberg sink table for chat messages"""
     
+    # First create the namespace/database
+    print("\nCreating default namespace...")
+    t_env.execute_sql("CREATE DATABASE IF NOT EXISTS `default`")
+    t_env.use_database("default")
+    
     sink_ddl = """
-    CREATE TABLE chat_messages_sink (
+    CREATE TABLE IF NOT EXISTS chat_messages_sink (
         stream_id STRING,
         subscription_id STRING,
         subscription_type STRING,
@@ -85,10 +90,8 @@ def create_iceberg_sink(t_env):
         processing_timestamp TIMESTAMP(3)
     ) PARTITIONED BY (broadcaster_user_id)
     WITH (
-        'write.format.default' = 'parquet',
-        'write.metadata.delete-after-commit.enabled'='true',
-        'write.metadata.previous-versions-max'='3',
-        'format-version' = '2'
+        'format-version' = '2',
+        'write.upsert.enabled' = 'true'
     )
     """
     
@@ -139,8 +142,6 @@ def main():
         "file:///opt/flink/lib/flink-sql-connector-kafka-3.0.2-1.18.jar;"
         "file:///opt/flink/lib/flink-sql-avro-confluent-registry-1.18.1.jar;"
         "file:///opt/flink/lib/iceberg-flink-runtime-1.18-1.5.0.jar;"
-        "file:///opt/flink/lib/hadoop-aws-3.3.4.jar;"
-        "file:///opt/flink/lib/hadoop-common-3.3.4.jar;"
         "file:///opt/flink/lib/aws-java-sdk-bundle-1.12.608.jar"
     ))
     
@@ -151,7 +152,7 @@ def main():
         insert_into_iceberg(t_env)
         
         # Keep the job running
-        while True:
+        while True: 
             time.sleep(1)
             
     except Exception as e:
