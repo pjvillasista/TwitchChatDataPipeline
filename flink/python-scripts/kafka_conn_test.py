@@ -1,85 +1,162 @@
 from pyflink.datastream import StreamExecutionEnvironment
 from pyflink.table import StreamTableEnvironment, EnvironmentSettings
+import time
 
-def test_kafka_connection():
-    # Create streaming environment
-    env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_parallelism(1)  # Set parallelism to 1 for testing
+def create_kafka_source(t_env):
+    """Create Kafka source table for chat messages"""
     
-    # Create table environment
-    settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
-    t_env = StreamTableEnvironment.create(env, settings)
-    
-    # Add required JAR files and configurations
-    t_env.get_config().get_configuration().set_string(
-        "pipeline.jars",
-        "file:///opt/flink/lib/flink-sql-connector-kafka-3.0.2-1.18.jar;" +
-        "file:///opt/flink/lib/flink-sql-avro-confluent-registry-1.18.1.jar"
+    chat_source_ddl = """
+    CREATE TABLE chat_messages (
+        stream_id STRING,
+        subscription_id STRING,
+        subscription_type STRING,
+        message_id STRING,
+        broadcaster_user_id STRING,
+        broadcaster_user_name STRING,
+        broadcaster_user_login STRING,
+        chatter_user_id STRING,
+        chatter_user_name STRING,
+        chatter_user_login STRING,
+        message_text STRING,
+        message_type STRING,
+        badges ARRAY<ROW<set_id STRING, id STRING, info STRING>>,
+        `timestamp` STRING,
+        event_time AS TO_TIMESTAMP(`timestamp`),
+        WATERMARK FOR event_time AS event_time - INTERVAL '5' SECONDS
+    ) WITH (
+        'connector' = 'kafka',
+        'topic' = 'twitch_chat_messages',
+        'properties.bootstrap.servers' = 'kafka:9092',
+        'properties.group.id' = 'flink-consumer',
+        'scan.startup.mode' = 'earliest-offset',
+        'format' = 'avro-confluent',
+        'avro-confluent.schema-registry.url' = 'http://schema-registry:8081'
     )
-
-    # Set checkpointing and state backend configurations
-    t_env.get_config().get_configuration().set_string("execution.checkpointing.interval", "10000")
-    t_env.get_config().get_configuration().set_string("state.backend", "filesystem")
-    t_env.get_config().get_configuration().set_string("state.checkpoints.dir", "file:///tmp/flink-checkpoints")
-
-    source_ddl = """
-        CREATE TABLE chat_messages (
-            stream_id STRING,
-            subscription_id STRING,
-            subscription_type STRING,
-            message_id STRING,
-            broadcaster_user_id STRING,
-            broadcaster_user_name STRING,
-            broadcaster_user_login STRING,
-            chatter_user_id STRING,
-            chatter_user_name STRING,
-            chatter_user_login STRING,
-            message_text STRING,
-            message_type STRING,
-            badges ARRAY<ROW(set_id STRING, id STRING, info STRING)>,
-            color STRING,
-            `timestamp` STRING
-        ) WITH (
-            'connector' = 'kafka',
-            'topic' = 'twitch_chat_messages',
-            'properties.bootstrap.servers' = 'kafka:9092',
-            'properties.group.id' = 'flink-test-consumer',
-            'format' = 'avro-confluent',
-            'avro-confluent.schema-registry.url' = 'http://schema-registry:8081',
-            'scan.startup.mode' = 'earliest-offset'
-        )
     """
     
+    print("\nCreating Kafka source table...")
+    t_env.execute_sql(chat_source_ddl)
+
+def create_iceberg_catalog(t_env):
+    """Create Iceberg catalog using Hadoop catalog"""
+    
+    # Set Hadoop S3A configurations
+    config = t_env.get_config().get_configuration()
+    config.set_string("fs.s3a.access.key", "admin")
+    config.set_string("fs.s3a.secret.key", "password")
+    config.set_string("fs.s3a.endpoint", "http://minio:9000")
+    config.set_string("fs.s3a.path.style.access", "true")
+    
+    catalog_ddl = """
+    CREATE CATALOG hadoop_catalog WITH (
+        'type'='iceberg',
+        'catalog-type'='hadoop',
+        'warehouse'='s3a://warehouse/twitch'
+    )
+    """
+    
+    print("\nCreating Iceberg catalog...")
+    t_env.execute_sql(catalog_ddl)
+    t_env.use_catalog("hadoop_catalog")
+    
+    print("\nCreating default database...")
+    t_env.execute_sql("CREATE DATABASE IF NOT EXISTS `default`")
+    t_env.use_database("default")
+
+def create_iceberg_sink(t_env):
+    """Create Iceberg sink table for chat messages"""
+    
+    sink_ddl = """
+    CREATE TABLE chat_messages_sink (
+        stream_id STRING,
+        subscription_id STRING,
+        subscription_type STRING,
+        message_id STRING,
+        broadcaster_user_id STRING,
+        broadcaster_user_name STRING,
+        broadcaster_user_login STRING,
+        chatter_user_id STRING,
+        chatter_user_name STRING,
+        chatter_user_login STRING,
+        message_text STRING,
+        message_type STRING,
+        badges ARRAY<ROW<set_id STRING, id STRING, info STRING>>,
+        source_timestamp STRING,
+        processing_timestamp TIMESTAMP(3)
+    ) PARTITIONED BY (broadcaster_user_id)
+    WITH (
+        'write.format.default' = 'parquet',
+        'write.metadata.delete-after-commit.enabled'='true',
+        'write.metadata.previous-versions-max'='3',
+        'format-version' = '2'
+    )
+    """
+    
+    print("\nCreating Iceberg sink table...")
+    t_env.execute_sql(sink_ddl)
+
+def insert_into_iceberg(t_env):
+    """Insert data from Kafka into Iceberg with transformations"""
+    
+    insert_sql = """
+    INSERT INTO chat_messages_sink
+    SELECT 
+        stream_id,
+        subscription_id,
+        subscription_type,
+        message_id,
+        broadcaster_user_id,
+        broadcaster_user_name,
+        broadcaster_user_login,
+        chatter_user_id,
+        chatter_user_name,
+        chatter_user_login,
+        message_text,
+        message_type,
+        badges,
+        `timestamp` as source_timestamp,
+        CURRENT_TIMESTAMP as processing_timestamp
+    FROM chat_messages
+    """
+    
+    print("\nStarting data ingestion pipeline...")
+    t_env.execute_sql(insert_sql)
+
+def main():
+    # Create Table environment
+    env = StreamExecutionEnvironment.get_execution_environment()
+    env.enable_checkpointing(30000)  # 30 seconds
+    
+    settings = EnvironmentSettings.new_instance()\
+        .in_streaming_mode()\
+        .build()
+    
+    t_env = StreamTableEnvironment.create(env, settings)
+    
+    # Add required JARs
+    config = t_env.get_config().get_configuration()
+    config.set_string("pipeline.jars", (
+        "file:///opt/flink/lib/flink-sql-connector-kafka-3.0.2-1.18.jar;"
+        "file:///opt/flink/lib/flink-sql-avro-confluent-registry-1.18.1.jar;"
+        "file:///opt/flink/lib/iceberg-flink-runtime-1.18-1.5.0.jar;"
+        "file:///opt/flink/lib/hadoop-aws-3.3.4.jar;"
+        "file:///opt/flink/lib/hadoop-common-3.3.4.jar;"
+        "file:///opt/flink/lib/aws-java-sdk-bundle-1.12.608.jar"
+    ))
+    
     try:
-        print("Creating source table...")
-        t_env.execute_sql(source_ddl)
+        create_kafka_source(t_env)
+        create_iceberg_catalog(t_env)
+        create_iceberg_sink(t_env)
+        insert_into_iceberg(t_env)
         
-        print("Executing query...")
-        test_query = """
-            SELECT 
-                message_id,
-                message_text,
-                chatter_user_name,
-                broadcaster_user_name,
-                `timestamp`
-            FROM chat_messages
-            LIMIT 5
-        """
-        
-        # Execute and print results
-        result = t_env.execute_sql(test_query)
-        print("Query executed successfully!")
-        
-        # Print the results
-        with result.collect() as results:
-            for row in results:
-                print(row)
-                
+        # Keep the job running
+        while True:
+            time.sleep(1)
+            
     except Exception as e:
-        print(f"Error occurred: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error: {str(e)}")
         raise
 
-if __name__ == '__main__':
-    test_kafka_connection()
+if __name__ == "__main__":
+    main()
