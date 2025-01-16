@@ -5,6 +5,9 @@ services:
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+      ZOO_ENABLE_AUTH: "false"
+      ZOO_MAX_CLIENT_CNXNS: 0
     ports:
       - "2181:2181"
     networks:
@@ -183,38 +186,14 @@ services:
     entrypoint: >
       /bin/sh -c "
       until (/usr/bin/mc config host add minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
-      /usr/bin/mc rm -r --force minio/warehouse;
       /usr/bin/mc mb minio/warehouse;
+      /usr/bin/mc mb minio/warehouse/flink-checkpoints;
+      /usr/bin/mc mb minio/warehouse/flink-savepoints;
       /usr/bin/mc policy set public minio/warehouse;
+      /usr/bin/mc policy set public minio/warehouse/flink-checkpoints;
+      /usr/bin/mc policy set public minio/warehouse/flink-savepoints;
       tail -f /dev/null
       "
-
-  # Spark Worker
-  spark-worker:
-    image: bitnami/spark:3.5
-    container_name: spark-worker
-    depends_on:
-      - spark-iceberg
-    environment:
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=2G
-      - SPARK_MASTER_URL=spark://spark-master:7077
-    networks:
-      - iceberg_net
-    ports:
-      - "8083:8081" # Adjusted for Spark Worker UI
-
-  # Spark Master
-  spark-master:
-    image: bitnami/spark:3.5
-    container_name: spark-master
-    environment:
-      - SPARK_MODE=master
-    networks:
-      - iceberg_net
-    ports:
-      - "7077:7077"
-      - "8084:8080" # Adjusted for Spark Master UI
 
 volumes:
   minio-data:
