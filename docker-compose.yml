@@ -71,6 +71,8 @@ services:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
       - ./flink/conf/core-site.xml:/opt/flink/conf/core-site.xml
+      - ./warehouse:/opt/flink/warehouse
+      - ./checkpoints:/opt/flink/checkpoints
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
@@ -99,6 +101,8 @@ services:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
       - ./flink/conf/core-site.xml:/opt/flink/conf/core-site.xml
+      - ./warehouse:/opt/flink/warehouse
+      - ./checkpoints:/opt/flink/checkpoints
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
@@ -122,7 +126,6 @@ services:
       - iceberg_net
     volumes:
       - ./warehouse:/home/iceberg/warehouse
-      - ./notebooks:/home/iceberg/notebooks/notebooks
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
