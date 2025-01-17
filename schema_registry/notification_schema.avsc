@@ -72,7 +72,11 @@
               "type": "string",
               "doc": "Set ID of the badge."
             },
-            { "name": "id", "type": "string", "doc": "Badge ID." },
+            {
+              "name": "id",
+              "type": "string",
+              "doc": "Badge ID."
+            },
             {
               "name": "info",
               "type": ["null", "string"],
@@ -95,27 +99,32 @@
           "fields": [
             {
               "name": "cumulative_months",
-              "type": "int",
+              "type": ["null", "int"],
+              "default": null,
               "doc": "Total number of months the user has subscribed."
             },
             {
               "name": "duration_months",
-              "type": "int",
+              "type": ["null", "int"],
+              "default": null,
               "doc": "Duration of the current subscription."
             },
             {
               "name": "sub_tier",
-              "type": "string",
+              "type": ["null", "string"],
+              "default": null,
               "doc": "Subscription tier (e.g., '1000', '2000')."
             },
             {
               "name": "is_prime",
-              "type": "boolean",
+              "type": ["null", "boolean"],
+              "default": null,
               "doc": "Indicates if the subscription is via Amazon Prime."
             },
             {
               "name": "is_gift",
-              "type": "boolean",
+              "type": ["null", "boolean"],
+              "default": null,
               "doc": "Indicates if the subscription is a gift."
             }
           ]
