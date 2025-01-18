@@ -31,20 +31,15 @@ TARGET_SCOPES = [AuthScope.USER_READ_CHAT]
 # Initialize Schema Registry Client
 schema_registry_client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
 
-# Load Avro schemas
-with open("schema_registry/notification_schema.avsc") as notification_schema_file:
-    notification_schema = notification_schema_file.read()
+# Function to fetch the latest schema by subject
+def get_latest_schema(schema_registry_client, subject_name):
+    latest_schema = schema_registry_client.get_latest_version(subject_name)
+    return latest_schema.schema.schema_str
 
-with open("schema_registry/message_schema.avsc") as chat_schema_file:
-    chat_message_schema = chat_schema_file.read()
-
-with open("schema_registry/channel_updates_schema.avsc") as schema_file:
-    channel_update_schema = schema_file.read()
-
-# Initialize Avro Serializers
-notification_serializer = AvroSerializer(schema_registry_client, notification_schema)
-chat_serializer = AvroSerializer(schema_registry_client, chat_message_schema)
-channel_update_serializer = AvroSerializer(schema_registry_client, channel_update_schema)
+# Fetch and initialize serializers with the actual schema strings
+notification_serializer = AvroSerializer(schema_registry_client, get_latest_schema(schema_registry_client, "twitch_notifications-value"))
+chat_serializer = AvroSerializer(schema_registry_client, get_latest_schema(schema_registry_client, "twitch_messages-value"))
+channel_update_serializer = AvroSerializer(schema_registry_client, get_latest_schema(schema_registry_client, "twitch_updates-value"))
 
 # Initialize Kafka Producer
 producer = Producer({"bootstrap.servers": KAFKA_BROKER})
