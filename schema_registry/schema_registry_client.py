@@ -42,17 +42,18 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     # Schema Registry URL
-    schema_url = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8090")
+    schema_url = os.getenv("SCHEMA_REGISTRY_URL")
 
     # Initialize Schema Client
     schema_client = SchemaClient(schema_url)
 
     # Define schemas to register
     schemas_to_register = [
-        {"subject_name": "twitch_sub_messages-value", "schema_path": "schema_registry/subscription_schema.avsc"},
-        {"subject_name": "twitch_chat_messages-value", "schema_path": "schema_registry/chat_message_schema.avsc"},
-        {"subject_name": "twitch_user_info-value", "schema_path": "schema_registry/user_info_schema.avsc"},
+        {"subject_name": "twitch_messages-value", "schema_path": "./message_schema.avsc"},
+        {"subject_name": "twitch_notifications-value", "schema_path": "./notification_schema.avsc"},
+        {"subject_name": "twitch_updates-value", "schema_path": "./channel_updates_schema.avsc"},
     ]
+
 
     # Register schemas and set compatibility
     for schema_info in schemas_to_register:
