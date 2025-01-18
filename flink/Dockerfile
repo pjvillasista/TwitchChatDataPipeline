@@ -10,18 +10,10 @@ RUN apt-get update -y && \
     python3-pip \
     openjdk-11-jdk \
     wget && \
-    ln -sf /usr/bin/python3 /usr/local/bin/python && \
-    pip3 install --no-cache-dir \
-    apache-flink==1.18.1 \
-    confluent-kafka \
-    fastavro \
-    httpx \
-    pyarrow \
-    avro-python3 \
-    requests \
-    confluent-kafka[avro] \
-    pandas
+    ln -sf /usr/bin/python3 /usr/local/bin/python3
 
+COPY requirements.txt /opt/flink/requirements.txt
+RUN pip3 install --no-cache-dir -r /opt/flink/requirements.txt
 
 RUN wget -P /opt/flink/lib/ https://repo.maven.apache.org/maven2/org/apache/flink/flink-python/1.18.1/flink-python-1.18.1.jar && \
     wget -P /opt/flink/lib/ https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-connector-kafka/3.0.2-1.18/flink-sql-connector-kafka-3.0.2-1.18.jar && \
@@ -35,8 +27,6 @@ RUN wget -P /opt/flink/lib/ https://repo.maven.apache.org/maven2/org/apache/flin
     wget -P /opt/flink/lib/ https://repo1.maven.org/maven2/software/amazon/awssdk/bundle/2.20.18/bundle-2.20.18.jar && \
     wget -P /opt/flink/lib/ https://repo1.maven.org/maven2/software/amazon/awssdk/url-connection-client/2.20.18/url-connection-client-2.20.18.jar && \
     wget -P /opt/flink/lib/ https://repo.maven.apache.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.608/aws-java-sdk-bundle-1.12.608.jar
-
-
 
 RUN mkdir -p /opt/flink/plugins/s3-fs-hadoop && \
     wget -P /opt/flink/plugins/s3-fs-hadoop https://repo1.maven.org/maven2/org/apache/flink/flink-s3-fs-hadoop/1.18.0/flink-s3-fs-hadoop-1.18.0.jar
