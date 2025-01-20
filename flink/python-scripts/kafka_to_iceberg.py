@@ -33,9 +33,16 @@ def run_ingestion():
     t_env.execute_sql("CREATE DATABASE IF NOT EXISTS raw_db")
     t_env.use_database("raw_db")
 
+    # Drop existing tables if they exist
+    print("\nCleaning up existing tables...")
+    try:
+        t_env.execute_sql("DROP TABLE IF EXISTS kafka_messages")
+    except Exception as e:
+        print(f"Warning while dropping kafka_messages: {str(e)}")
+
     # Create Kafka source table
     source_ddl = """
-    CREATE TABLE IF NOT EXISTS kafka_messages (
+    CREATE TABLE kafka_messages (
         stream_id STRING,
         subscription_id STRING,
         subscription_type STRING, 
@@ -60,7 +67,7 @@ def run_ingestion():
         'avro-confluent.schema-registry.url' = 'http://schema-registry:8081'
     )"""
     
-    # Create Iceberg sink table
+    # Create Iceberg sink table (if not exists)
     sink_ddl = """
     CREATE TABLE IF NOT EXISTS chat_messages (
         stream_id STRING,
