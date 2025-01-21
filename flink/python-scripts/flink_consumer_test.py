@@ -1,62 +1,63 @@
-from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.datastream.connectors import FlinkKafkaConsumer
-from pyflink.common.serialization import SimpleStringSchema
-from pyflink.common.typeinfo import Types
+from confluent_kafka import Consumer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
+from confluent_kafka.serialization import SerializationContext, MessageField
 import logging
-import json
+import time
 
-def consume_kafka():
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger("FlinkKafkaConsumer")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-    # Initialize Schema Registry client
+def check_kafka_topic():
+    # Setup Schema Registry client and deserializer
     schema_registry_conf = {'url': 'http://schema-registry:8081'}
     schema_registry_client = SchemaRegistryClient(schema_registry_conf)
 
-    # Create deserializer for the value
-    value_deserializer = AvroDeserializer(schema_registry_client)
+    avro_deserializer = AvroDeserializer(schema_registry_client)
 
-    env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_parallelism(1)
-
-    # Add required JARs
-    env.add_jars("file:///opt/flink/lib/flink-connector-kafka_2.12-1.16.2.jar",
-                 "file:///opt/flink/lib/flink-avro-1.16.2.jar")
-
-    kafka_props = {
-        "bootstrap.servers": "kafka:9092",
-        "group.id": "flink-consumer-group",
-        "auto.offset.reset": "earliest",
-        "schema.registry.url": "http://schema-registry:8081"
+    consumer_conf = {
+        'bootstrap.servers': 'kafka:9092',
+        'group.id': 'test-consumer-group',
+        'auto.offset.reset': 'earliest'
     }
 
-    kafka_consumer = FlinkKafkaConsumer(
-        topics="twitch_chat_messages",
-        deserialization_schema=SimpleStringSchema(),
-        properties=kafka_props
-    )
+    consumer = Consumer(consumer_conf)
+    consumer.subscribe(['twitch_chat_messages'])
 
-    stream = env.add_source(kafka_consumer)
+    try:
+        msg_count = 0
+        start_time = time.time()
+        logger.info("Checking for messages...")
 
-    def process_message(message):
-        try:
-            # Deserialize Avro message
-            deserialized_data = value_deserializer(message)
-            logger.info(f"Processed message: {deserialized_data}")
-            return json.dumps(deserialized_data)
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            return str(e)
+        while time.time() - start_time < 10:
+            msg = consumer.poll(1.0)
+            if msg is None:
+                continue
+            if msg.error():
+                logger.error(f"Consumer error: {msg.error()}")
+                break
 
-    stream.map(
-        process_message,
-        output_type=Types.STRING()
-    ).print()
+            msg_count += 1
 
-    logger.info("Starting Kafka consumer...")
-    env.execute("Twitch Chat Consumer")
+            # Deserialize the entire message and log
+            try:
+                deserialized_msg = avro_deserializer(
+                    msg.value(),
+                    SerializationContext(msg.topic(), MessageField.VALUE)
+                )
+                logger.info("\nDeserialized message:")
+                logger.info(deserialized_msg)  # Log the entire message as JSON-like object
+            except Exception as e:
+                logger.error(f"Error deserializing message: {e}")
+                logger.info(f"Raw message: {msg.value()}")
+
+        logger.info(f"\nFound {msg_count} messages in sample")
+
+    finally:
+        consumer.close()
 
 if __name__ == "__main__":
-    consume_kafka()
+    check_kafka_topic()
