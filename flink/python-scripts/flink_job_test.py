@@ -1,85 +1,84 @@
 from pyflink.table import TableEnvironment, EnvironmentSettings
-import time
+import logging
+import os
+from datetime import datetime
 
-def create_kafka_source(t_env):
-    # Create Kafka source table in default catalog with bounded reading
-    chat_source_ddl = """
-    CREATE TABLE default_catalog.default_database.chat_messages (
-        stream_id STRING,
-        subscription_id STRING,
-        subscription_type STRING, 
-        message_id STRING,
-        broadcaster_user_id STRING,
-        broadcaster_user_name STRING,
-        broadcaster_user_login STRING,
-        chatter_user_id STRING,
-        chatter_user_name STRING,
-        chatter_user_login STRING,
-        message_text STRING,
-        message_type STRING,
-        badges ARRAY<ROW<set_id STRING, id STRING, info STRING>>,
-        `timestamp` STRING
-    ) WITH (
-        'connector' = 'kafka',
-        'topic' = 'chat_messages',
-        'properties.bootstrap.servers' = 'kafka:9092',
-        'properties.group.id' = 'flink-consumer-group',
-        'scan.startup.mode' = 'earliest-offset',
-        'scan.bounded.mode' = 'latest-offset',
-        'format' = 'avro-confluent',
-        'avro-confluent.schema-registry.url' = 'http://schema-registry:8081'
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def configure_environment():
+    # Switch to streaming mode
+    settings = EnvironmentSettings.in_streaming_mode()
+    t_env = TableEnvironment.create(settings)
+    t_env.get_config().get_configuration().set_integer("parallelism.default", 2)
+
+    config = t_env.get_config().get_configuration()
+    
+    # Configure dependencies
+    config.set_string("pipeline.jars", (
+        "file:///opt/flink/lib/flink-sql-connector-kafka-3.0.2-1.18.jar;"
+        "file:///opt/flink/lib/flink-sql-avro-confluent-registry-1.18.1.jar;"
+        "file:///opt/flink/lib/iceberg-flink-runtime-1.18-1.5.0.jar;"
+        "file:///opt/flink/lib/aws-java-sdk-bundle-1.12.608.jar"
+    ))
+    
+    # Configure checkpointing for fault tolerance
+    config.set_string("execution.checkpointing.interval", "30s")
+    config.set_string("execution.checkpointing.mode", "EXACTLY_ONCE")
+    config.set_string("execution.checkpointing.timeout", "10min")
+    config.set_string("execution.checkpointing.min-pause", "5s")
+    config.set_string("execution.checkpointing.max-concurrent-checkpoints", "1")
+    
+    # State backend configuration
+    config.set_string("state.backend", "rocksdb")
+    config.set_string("state.checkpoints.dir", "file:///opt/flink/checkpoints")
+    config.set_string("state.backend.incremental", "true")
+    
+    # MinIO/S3 Configuration
+    config.set_string("s3.endpoint", "http://minio:9000")
+    config.set_string("s3.path.style.access", "true")
+    config.set_string("s3.access-key", "admin")
+    config.set_string("s3.secret-key", "password")
+    
+    # AWS SDK Configuration
+    config.set_string("aws.region", "us-east-1")
+    config.set_string("aws.credentials.provider", "BASIC")
+    config.set_string("aws.credentials.basic.accesskeyid", "admin")
+    config.set_string("aws.credentials.basic.secretkey", "password")
+    
+    os.environ["AWS_ACCESS_KEY_ID"] = "admin"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "password"
+    os.environ["AWS_REGION"] = "us-east-1"
+    
+    return t_env
+
+def setup_iceberg_catalog(t_env):
+    logger.info("Setting up Iceberg catalog...")
+    
+    catalog_sql = """
+    CREATE CATALOG iceberg_catalog WITH (
+        'type'='iceberg',
+        'catalog-impl'='org.apache.iceberg.rest.RESTCatalog',
+        'uri'='http://rest:8181',
+        'warehouse'='s3://warehouse',
+        'io-impl'='org.apache.iceberg.aws.s3.S3FileIO',
+        's3.endpoint'='http://minio:9000',
+        's3.path-style-access'='true',
+        's3.access-key-id'='admin',
+        's3.secret-access-key'='password',
+        'aws.region'='us-east-1'
     )"""
     
-    try:
-        print("\nCreating Kafka source table...")
-        t_env.execute_sql(chat_source_ddl)
-        
-        # Create view with date computation
-        view_sql = """
-        CREATE VIEW default_catalog.default_database.chat_messages_with_date AS
-        SELECT 
-            *,
-            DATE_FORMAT(TO_TIMESTAMP(`timestamp`), 'yyyy-MM-dd') as event_date
-        FROM default_catalog.default_database.chat_messages
-        """
-        t_env.execute_sql(view_sql)
-    except Exception as e:
-        print(f"Error creating Kafka source: {str(e)}")
-        raise
-
-def configure_iceberg_catalog(t_env):
-    try:
-        print("\nConfiguring Iceberg catalog...")
-        catalog_sql = """
-        CREATE CATALOG iceberg_catalog WITH (
-            'type'='iceberg',
-            'catalog-impl'='org.apache.iceberg.rest.RESTCatalog',
-            'uri'='http://rest:8181',
-            'warehouse'='s3://warehouse',
-            'io-impl'='org.apache.iceberg.aws.s3.S3FileIO',
-            's3.endpoint'='http://minio.minio:9000',
-            's3.path-style-access'='true',
-            's3.access-key-id'='admin',
-            's3.secret-access-key'='password'
-        )"""
-        t_env.execute_sql(catalog_sql)
-        t_env.use_catalog("iceberg_catalog")
-        
-        t_env.execute_sql("CREATE DATABASE IF NOT EXISTS raw_db")
-        t_env.use_database("raw_db")
-        
-    except Exception as e:
-        print(f"Error configuring Iceberg catalog: {str(e)}")
-        raise
-
-def create_iceberg_sink(t_env):
-    try:
-        t_env.execute_sql("DROP TABLE IF EXISTS iceberg_catalog.raw_db.chat_messages_sink")
-    except Exception as e:
-        print(f"Warning while dropping existing table: {str(e)}")
-
+    t_env.execute_sql(catalog_sql)
+    t_env.use_catalog("iceberg_catalog")
+    t_env.execute_sql("CREATE DATABASE IF NOT EXISTS raw_db")
+    t_env.use_database("raw_db")
+    
     sink_ddl = """
-    CREATE TABLE iceberg_catalog.raw_db.chat_messages_sink (
+    CREATE TABLE IF NOT EXISTS iceberg_catalog.raw_db.raw_messages (
         stream_id STRING,
         subscription_id STRING,
         subscription_type STRING,
@@ -94,27 +93,65 @@ def create_iceberg_sink(t_env):
         message_type STRING,
         badges ARRAY<ROW<set_id STRING, id STRING, info STRING>>,
         source_timestamp STRING,
-        event_date STRING,
-        PRIMARY KEY (broadcaster_user_id, message_id, event_date) NOT ENFORCED
-    ) PARTITIONED BY (broadcaster_user_id, event_date) WITH (
-        'format-version'='2',
-        'write.distribution-mode'='hash',
-        'write.metadata.delete-after-commit.enabled'='true',
-        'write.metadata.previous-versions-max'='10',
-        'write.target-file-size-bytes'='536870912',
-        'write.upsert.enabled'='true'
+        processing_time TIMESTAMP(6),
+        PRIMARY KEY (broadcaster_user_id, stream_id, message_id) NOT ENFORCED
+    ) PARTITIONED BY (broadcaster_user_id, stream_id) WITH (
+        'format-version' = '2',
+        'write.distribution-mode' = 'hash',
+        'write.metadata.delete-after-commit.enabled' = 'true',
+        'write.upsert.enabled' = 'false',
+        'write.parquet.compression-codec' = 'snappy',
+        'write.target-file-size-bytes' = '536870912',
+        'write.parquet.page-size-bytes' = '65536',
+        'write.parquet.dict-size-bytes' = '2097152',
+        'write.parquet.dict.enabled' = 'true',
+        'write.metadata.previous-versions-max' = '10',
+        'write.merge.enabled' = 'true',
+        'write.merge.max-concurrent-file-group-rewrites' = '10',
+        'write.merge.max-file-groups-per-rewrite' = '10'
     )"""
     
-    try:
-        print("\nCreating Iceberg sink table...")
-        t_env.execute_sql(sink_ddl)
-    except Exception as e:
-        print(f"Error creating Iceberg sink: {str(e)}")
-        raise
+    t_env.execute_sql(sink_ddl)
+    logger.info("✓ Iceberg sink table created")
 
-def insert_into_iceberg(t_env):
+def setup_kafka_source(t_env):
+    logger.info("Creating Kafka source table...")
+    
+    source_ddl = """
+    CREATE TABLE default_catalog.default_database.kafka_source (
+        stream_id STRING,
+        subscription_id STRING,
+        subscription_type STRING,
+        message_id STRING,
+        broadcaster_user_id STRING,
+        broadcaster_user_name STRING,
+        broadcaster_user_login STRING,
+        chatter_user_id STRING,
+        chatter_user_name STRING,
+        chatter_user_login STRING,
+        message_text STRING,
+        message_type STRING,
+        badges ARRAY<ROW<set_id STRING, id STRING, info STRING>>,
+        `timestamp` STRING
+    ) WITH (
+        'connector' = 'kafka',
+        'topic' = 'twitch_chat_messages',
+        'properties.bootstrap.servers' = 'kafka:9092',
+        'properties.group.id' = 'flink-streaming-consumer',
+        'scan.startup.mode' = 'group-offsets',
+        'properties.auto.offset.reset' = 'earliest',
+        'format' = 'avro-confluent',
+        'avro-confluent.schema-registry.url' = 'http://schema-registry:8081'
+    )"""
+    
+    t_env.execute_sql(source_ddl)
+    logger.info("✓ Kafka source table created")
+
+def create_continuous_query(t_env):
+    logger.info("Starting continuous streaming query...")
+    
     insert_sql = """
-    INSERT INTO iceberg_catalog.raw_db.chat_messages_sink
+    INSERT INTO iceberg_catalog.raw_db.raw_messages
     SELECT 
         stream_id,
         subscription_id,
@@ -130,54 +167,39 @@ def insert_into_iceberg(t_env):
         message_type,
         badges,
         `timestamp` as source_timestamp,
-        event_date
-    FROM default_catalog.default_database.chat_messages_with_date
-    """
+        CAST(LOCALTIMESTAMP AS TIMESTAMP(6)) as processing_time
+    FROM default_catalog.default_database.kafka_source"""
+    
+    # Execute streaming insert
+    statement_set = t_env.create_statement_set()
+    statement_set.add_insert_sql(insert_sql)
+    
     try:
-        print("\nStarting data ingestion pipeline...")
-        t_env.execute_sql(insert_sql)
-        print("\nBatch ingestion completed successfully")
+        job_client = statement_set.execute().get_job_client()
+        if job_client:
+            execution_result = job_client.get_job_execution_result().result()
+            logger.info(f"Job executed successfully: {execution_result}")
     except Exception as e:
-        print(f"Error during data ingestion: {str(e)}")
+        logger.error(f"Error executing streaming job: {str(e)}")
         raise
 
 def main():
-    # Initialize Flink environment in batch mode
-    settings = EnvironmentSettings.new_instance() \
-        .in_batch_mode() \
-        .build()
-    
-    t_env = TableEnvironment.create(settings)
-    
-    # Configure pipeline dependencies
-    config = t_env.get_config().get_configuration()
-    config.set_string("pipeline.jars", (
-        "file:///opt/flink/lib/flink-sql-connector-kafka-3.0.2-1.18.jar;"
-        "file:///opt/flink/lib/flink-sql-avro-confluent-registry-1.18.1.jar;"
-        "file:///opt/flink/lib/iceberg-flink-runtime-1.18-1.5.0.jar;"
-        "file:///opt/flink/lib/aws-java-sdk-bundle-1.12.608.jar"
-    ))
-    
     try:
-        # Setup pipeline components
-        configure_iceberg_catalog(t_env)
-        create_kafka_source(t_env)
-        create_iceberg_sink(t_env)
+        t_env = configure_environment()
+        setup_iceberg_catalog(t_env)
+        setup_kafka_source(t_env)
+        create_continuous_query(t_env)
         
-        # Validate setup
-        print("\nValidating setup...")
-        catalogs = t_env.execute_sql("SHOW CATALOGS").collect()
-        print(f"Available catalogs: {[cat[0] for cat in catalogs]}")
-        
-        tables = t_env.execute_sql("SHOW TABLES").collect()
-        print(f"Available tables: {[table[0] for table in tables]}")
-        
-        # Execute batch ingestion
-        insert_into_iceberg(t_env)
-        print("\nBatch processing completed")
+        # Keep the job running
+        try:
+            import time
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Stopping streaming job...")
             
     except Exception as e:
-        print(f"Error in main: {str(e)}")
+        logger.error(f"Pipeline failed: {str(e)}")
         raise
 
 if __name__ == "__main__":
