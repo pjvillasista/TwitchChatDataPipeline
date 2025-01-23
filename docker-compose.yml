@@ -103,14 +103,13 @@ services:
     volumes:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
-      - ./flink/conf/core-site.xml:/opt/flink/conf/core-site.xml
-      - ./warehouse:/opt/flink/warehouse
-      - ./checkpoints:/opt/flink/checkpoints
     ports:
       - "8082:8082" # Flink JobManager Web UI
     depends_on:
       - kafka
       - minio
+    environment:
+      - AWS_REGION=us-east-1
     networks:
       iceberg_net:
         aliases:
@@ -128,33 +127,10 @@ services:
     volumes:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
-      - ./flink/conf/core-site.xml:/opt/flink/conf/core-site.xml
-      - ./warehouse:/opt/flink/warehouse
-      - ./checkpoints:/opt/flink/checkpoints
-    networks:
-      - iceberg_net
-
-  # Spark-Iceberg
-  spark-iceberg:
-    image: tabulario/spark-iceberg:latest
-    container_name: spark-iceberg
-    depends_on:
-      - kafka
-      - rest
-      - minio
-    networks:
-      - iceberg_net
-    volumes:
-      - ./warehouse:/home/iceberg/warehouse
     environment:
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
       - AWS_REGION=us-east-1
-      - SPARK_MASTER=spark://spark-master:7077
-    ports:
-      - "8888:8888"
-      - "10000:10000"
-      - "10001:10001"
+    networks:
+      - iceberg_net
 
   # Iceberg REST Catalog
   rest:
@@ -181,14 +157,12 @@ services:
       - MINIO_ROOT_PASSWORD=password
       - MINIO_DOMAIN=minio
       - MINIO_REGION_NAME=us-east-1
-      - MINIO_REGION=us-east-1
     networks:
       iceberg_net:
         aliases:
           - warehouse.minio
     volumes:
       - ./minio-data:/data
-      - ./minio-config:/root/.minio # Persist MinIO configuration
     ports:
       - "9001:9001"
       - "9000:9000"
@@ -210,16 +184,90 @@ services:
       /bin/sh -c "
       until (/usr/bin/mc config host add minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
       /usr/bin/mc mb minio/warehouse;
-      /usr/bin/mc mb minio/warehouse/flink-checkpoints;
-      /usr/bin/mc mb minio/warehouse/flink-savepoints;
       /usr/bin/mc policy set public minio/warehouse;
-      /usr/bin/mc policy set public minio/warehouse/flink-checkpoints;
-      /usr/bin/mc policy set public minio/warehouse/flink-savepoints;
       tail -f /dev/null
       "
+  postgres:
+    image: postgres:16.1
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready - U airflow"]
+      interval: 5s
+      retries: 5
+      start_period: 5s
+
+  airflow-init:
+    image: apache/airflow:2.8.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+    command: db init
+
+  airflow-webserver:
+    image: apache/airflow:2.8.1
+    depends_on:
+      - airflow-init
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - _AIRFLOW_DB_UPGRADE=true
+      - _AIRFLOW_WWW_USER_CREATE=true
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=admin
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/requirements.txt:/opt/airflow/requirements.txt
+      - ./flink/python-scripts:/opt/airflow/flink/scripts
+      - ./kafka:/opt/airflow/kafka
+    ports:
+      - "8083:8080"
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - iceberg_net
+
+  airflow-scheduler:
+    image: apache/airflow:2.7.1
+    depends_on:
+      - airflow-init
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - _AIRFLOW_DB_UPGRADE=true
+      - _AIRFLOW_WWW_USER_CREATE=true
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=admin
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/requirements.txt:/opt/airflow/requirements.txt
+      - ./flink/python-scripts:/opt/airflow/flink/scripts
+      - ./kafka:/opt/airflow/kafka
+    command: scheduler
+    networks:
+      - iceberg_net
 
 volumes:
   minio-data:
+  postgres-db-volume:
   kafka-data:
     driver: local
 
