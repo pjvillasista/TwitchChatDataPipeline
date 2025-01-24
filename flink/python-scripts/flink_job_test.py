@@ -13,7 +13,7 @@ def configure_environment():
     # Switch to streaming mode
     settings = EnvironmentSettings.in_streaming_mode()
     t_env = TableEnvironment.create(settings)
-    t_env.get_config().get_configuration().set_integer("parallelism.default", 2)
+    t_env.get_config().get_configuration().set_integer("parallelism.default", 1)
 
     config = t_env.get_config().get_configuration()
     
@@ -26,10 +26,10 @@ def configure_environment():
     ))
     
     # Configure checkpointing for fault tolerance
-    config.set_string("execution.checkpointing.interval", "30s")
+    config.set_string("execution.checkpointing.interval", "5min")
     config.set_string("execution.checkpointing.mode", "EXACTLY_ONCE")
     config.set_string("execution.checkpointing.timeout", "10min")
-    config.set_string("execution.checkpointing.min-pause", "5s")
+    config.set_string("execution.checkpointing.min-pause", "30s")
     config.set_string("execution.checkpointing.max-concurrent-checkpoints", "1")
     
     # State backend configuration
@@ -108,7 +108,8 @@ def setup_iceberg_catalog(t_env):
         'write.metadata.previous-versions-max' = '10',
         'write.merge.enabled' = 'true',
         'write.merge.max-concurrent-file-group-rewrites' = '10',
-        'write.merge.max-file-groups-per-rewrite' = '10'
+        'write.merge.max-file-groups-per-rewrite' = '10',
+        'write.commit.interval' = '15min'
     )"""
     
     t_env.execute_sql(sink_ddl)
