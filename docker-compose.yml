@@ -103,6 +103,7 @@ services:
     volumes:
       - ./flink/conf:/opt/flink/conf
       - ./flink/python-scripts:/opt/flink/python-scripts
+      - ./flink/python-scripts-test:/opt/flink/python-scripts-test
     ports:
       - "8082:8082" # Flink JobManager Web UI
     depends_on:
@@ -187,87 +188,47 @@ services:
       /usr/bin/mc policy set public minio/warehouse;
       tail -f /dev/null
       "
-  postgres:
-    image: postgres:16.1
-    environment:
-      - POSTGRES_USER=airflow
-      - POSTGRES_PASSWORD=airflow
-      - POSTGRES_DB=airflow
-    volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready - U airflow"]
-      interval: 5s
-      retries: 5
-      start_period: 5s
 
-  airflow-init:
-    image: apache/airflow:2.8.1
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
-    command: db init
-
-  airflow-webserver:
-    image: apache/airflow:2.8.1
-    depends_on:
-      - airflow-init
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - _AIRFLOW_DB_UPGRADE=true
-      - _AIRFLOW_WWW_USER_CREATE=true
-      - _AIRFLOW_WWW_USER_USERNAME=admin
-      - _AIRFLOW_WWW_USER_PASSWORD=admin
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-      - ./airflow/requirements.txt:/opt/airflow/requirements.txt
-      - ./flink/python-scripts:/opt/airflow/flink/scripts
-      - ./kafka:/opt/airflow/kafka
+  trino-coordinator:
+    image: trinodb/trino:428
+    hostname: trino-coordinator
+    container_name: trino-coordinator
     ports:
-      - "8083:8080"
-    command: webserver
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    networks:
-      - iceberg_net
-
-  airflow-scheduler:
-    image: apache/airflow:2.7.1
-    depends_on:
-      - airflow-init
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - _AIRFLOW_DB_UPGRADE=true
-      - _AIRFLOW_WWW_USER_CREATE=true
-      - _AIRFLOW_WWW_USER_USERNAME=admin
-      - _AIRFLOW_WWW_USER_PASSWORD=admin
+      - "8083:8083"
     volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-      - ./airflow/requirements.txt:/opt/airflow/requirements.txt
-      - ./flink/python-scripts:/opt/airflow/flink/scripts
-      - ./kafka:/opt/airflow/kafka
-    command: scheduler
+      - ./trino/etc/config.properties:/etc/trino/config.properties
+      - ./trino/etc/catalog:/etc/trino/catalog:ro
+      - ./trino/etc/node.properties:/etc/trino/node.properties:ro
+      - ./trino/etc/jvm.config:/etc/trino/jvm.config:ro
     networks:
       - iceberg_net
+    depends_on:
+      - kafka
+      - minio
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+  trino-worker:
+    image: trinodb/trino:428
+    hostname: trino-worker1
+    container_name: trino-worker
+    volumes:
+      - ./trino/etc/worker/config.properties:/etc/trino/config.properties
+      - ./trino/etc/catalog:/etc/trino/catalog:ro
+      - ./trino/etc/node.properties:/etc/trino/node.properties:ro
+      - ./trino/etc/jvm.config:/etc/trino/jvm.config:ro
+    networks:
+      - iceberg_net
+    depends_on:
+      - trino-coordinator
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
 
 volumes:
   minio-data:
-  postgres-db-volume:
   kafka-data:
     driver: local
 
