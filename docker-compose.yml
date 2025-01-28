@@ -148,6 +148,11 @@ services:
       - CATALOG_WAREHOUSE=s3://warehouse/
       - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
       - CATALOG_S3_ENDPOINT=http://minio:9000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181/v1/config"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # MinIO Storage
   minio:
@@ -189,43 +194,46 @@ services:
       tail -f /dev/null
       "
 
-  trino-coordinator:
-    image: trinodb/trino:428
-    hostname: trino-coordinator
-    container_name: trino-coordinator
-    ports:
-      - "8083:8083"
-    volumes:
-      - ./trino/etc/config.properties:/etc/trino/config.properties
-      - ./trino/etc/catalog:/etc/trino/catalog:ro
-      - ./trino/etc/node.properties:/etc/trino/node.properties:ro
-      - ./trino/etc/jvm.config:/etc/trino/jvm.config:ro
-    networks:
-      - iceberg_net
-    depends_on:
-      - kafka
-      - minio
-    environment:
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
-      - AWS_REGION=us-east-1
-  trino-worker:
-    image: trinodb/trino:428
-    hostname: trino-worker1
-    container_name: trino-worker
-    volumes:
-      - ./trino/etc/worker/config.properties:/etc/trino/config.properties
-      - ./trino/etc/catalog:/etc/trino/catalog:ro
-      - ./trino/etc/node.properties:/etc/trino/node.properties:ro
-      - ./trino/etc/jvm.config:/etc/trino/jvm.config:ro
-    networks:
-      - iceberg_net
-    depends_on:
-      - trino-coordinator
-    environment:
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
-      - AWS_REGION=us-east-1
+  # trino-coordinator:
+  #   image: trinodb/trino:428
+  #   hostname: trino-coordinator
+  #   container_name: trino-coordinator
+  #   ports:
+  #     - "8088:8080"
+  #   user: "root"
+  #   command: >
+  #     /bin/bash -c "
+  #     chmod -R 755 /etc/trino &&
+  #     /usr/lib/trino/bin/launcher run"
+  #   volumes:
+  #     - ./trino/etc/coordinator/config.properties:/etc/trino/config.properties
+  #     - ./trino/etc/catalog:/etc/trino/catalog
+  #     - ./trino/etc/node.properties:/etc/trino/node.properties
+  #     - ./trino/etc/jvm.config:/etc/trino/jvm.config
+  #   networks:
+  #     - iceberg_net
+  #   depends_on:
+  #     - kafka
+  #     - minio
+
+  # trino-worker:
+  #   image: trinodb/trino:428
+  #   hostname: trino-worker1
+  #   container_name: trino-worker
+  #   user: "root"
+  #   command: >
+  #     /bin/bash -c "
+  #     chmod -R 755 /etc/trino &&
+  #     /usr/lib/trino/bin/launcher run"
+  #   volumes:
+  #     - ./trino/etc/worker/config.properties:/etc/trino/config.properties
+  #     - ./trino/etc/catalog:/etc/trino/catalog
+  #     - ./trino/etc/node.properties:/etc/trino/node.properties
+  #     - ./trino/etc/jvm.config:/etc/trino/jvm.config
+  #   networks:
+  #     - iceberg_net
+  #   depends_on:
+  #     - trino-coordinator
 
 volumes:
   minio-data:
